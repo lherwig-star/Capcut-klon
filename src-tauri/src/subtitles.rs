@@ -65,6 +65,26 @@ fn extract_audio(video_path: &Path, out_wav: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Parst die Ausgabe von `ffprobe -of csv=p=0:s=x stream=width,height`.
+/// Manche ffprobe-Versionen hängen einen zusätzlichen Trenner ans Zeilenende
+/// (z.B. "2160x3840x" statt "2160x3840") — leere Teile daher rausfiltern.
+fn parse_resolution_csv(out: &str) -> Result<(u32, u32), String> {
+    let mut parts = out.trim().split('x').filter(|s| !s.is_empty());
+    let w: u32 = parts
+        .next()
+        .ok_or_else(|| "Videoauflösung konnte nicht ermittelt werden".to_string())?
+        .trim()
+        .parse()
+        .map_err(|_| "Ungültige Breite".to_string())?;
+    let h: u32 = parts
+        .next()
+        .ok_or_else(|| "Videoauflösung konnte nicht ermittelt werden".to_string())?
+        .trim()
+        .parse()
+        .map_err(|_| "Ungültige Höhe".to_string())?;
+    Ok((w, h))
+}
+
 pub fn get_video_resolution(video_path: &Path) -> Result<(u32, u32), String> {
     let mut cmd = Command::new("ffprobe");
     cmd.args([
@@ -79,13 +99,7 @@ pub fn get_video_resolution(video_path: &Path) -> Result<(u32, u32), String> {
     ])
     .arg(video_path);
     let out = run(cmd)?;
-    let (w, h) = out
-        .trim()
-        .split_once('x')
-        .ok_or_else(|| "Videoauflösung konnte nicht ermittelt werden".to_string())?;
-    let w: u32 = w.trim().parse().map_err(|_| "Ungültige Breite".to_string())?;
-    let h: u32 = h.trim().parse().map_err(|_| "Ungültige Höhe".to_string())?;
-    Ok((w, h))
+    parse_resolution_csv(&out)
 }
 
 /// Extrahiert die Audiospur aus dem Video und transkribiert sie lokal mit whisper.cpp.
@@ -196,12 +210,30 @@ fn escape_ffmpeg_filter_path(path: &Path) -> String {
     format!("'{s}'")
 }
 
+/// Stellt sicher, dass der Ausgabepfad auf `.mp4` endet — der native Speichern-Dialog
+/// erzwingt die Endung nicht zwingend, ohne sie kann ffmpeg das Ausgabeformat nicht
+/// erraten und bricht ab (Symptom: "Rendern" tut scheinbar nichts, keine Datei landet).
+fn normalize_output_path(output_path: &Path) -> PathBuf {
+    match output_path.extension() {
+        Some(ext) if ext.eq_ignore_ascii_case("mp4") => output_path.to_path_buf(),
+        _ => {
+            let mut s = output_path.to_string_lossy().to_string();
+            s.push_str(".mp4");
+            PathBuf::from(s)
+        }
+    }
+}
+
 /// Brennt die übergebenen Untertitel-Zeilen (mit individueller Font pro Zeile) ins Video ein.
+/// Gibt den tatsächlich geschriebenen Ausgabepfad zurück (kann von `output_path` abweichen,
+/// falls dort die `.mp4`-Endung gefehlt hat).
 pub fn render_subtitled_video(
     video_path: &Path,
     lines: &[SubtitleLine],
     output_path: &Path,
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
+    let output_path = normalize_output_path(output_path);
+
     let (w, h) = get_video_resolution(video_path)?;
     let ass_content = build_ass(lines, w, h);
 
@@ -217,18 +249,62 @@ pub fn render_subtitled_video(
         .arg("-vf")
         .arg(&filter)
         .arg("-c:a")
-        .arg("copy")
-        .arg(output_path);
+        .arg("aac")
+        .arg("-b:a")
+        .arg("192k")
+        .arg("-f")
+        .arg("mp4")
+        .arg(&output_path);
     let result = run(cmd);
 
     let _ = std::fs::remove_file(&tmp_ass);
     result?;
-    Ok(())
+
+    match std::fs::metadata(&output_path) {
+        Ok(meta) if meta.len() > 0 => Ok(output_path),
+        Ok(_) => Err(format!(
+            "ffmpeg meldete Erfolg, aber {} ist leer.",
+            output_path.display()
+        )),
+        Err(e) => Err(format!(
+            "ffmpeg meldete Erfolg, aber die Datei {} wurde nicht gefunden: {e}",
+            output_path.display()
+        )),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_resolution_csv_with_trailing_separator() {
+        // Bug aus der Praxis (iPhone-Video, ffmpeg 9.0): ffprobe hängt einen
+        // zusätzlichen Trenner an, "Ungültige Höhe" flog beim naiven split_once.
+        assert_eq!(parse_resolution_csv("2160x3840x\n"), Ok((2160, 3840)));
+        assert_eq!(parse_resolution_csv("2160x3840x"), Ok((2160, 3840)));
+        assert_eq!(parse_resolution_csv("1920x1080\n"), Ok((1920, 1080)));
+    }
+
+    #[test]
+    fn normalizes_output_path_missing_or_wrong_extension() {
+        assert_eq!(
+            normalize_output_path(Path::new("/tmp/out")),
+            PathBuf::from("/tmp/out.mp4")
+        );
+        assert_eq!(
+            normalize_output_path(Path::new("/tmp/out.mov")),
+            PathBuf::from("/tmp/out.mov.mp4")
+        );
+        assert_eq!(
+            normalize_output_path(Path::new("/tmp/out.mp4")),
+            PathBuf::from("/tmp/out.mp4")
+        );
+        assert_eq!(
+            normalize_output_path(Path::new("/tmp/out.MP4")),
+            PathBuf::from("/tmp/out.MP4")
+        );
+    }
 
     #[test]
     fn formats_ass_timestamps() {
@@ -306,11 +382,45 @@ mod tests {
             .collect();
 
         let output = std::env::temp_dir().join("capcut-e2e-test-output.mp4");
-        let result_path = render_subtitled_video(&video, &lines, &output).map(|_| output.clone());
+        let result_path = render_subtitled_video(&video, &lines, &output);
         assert!(result_path.is_ok(), "Render fehlgeschlagen: {:?}", result_path.err());
-        assert!(output.exists());
-        assert!(std::fs::metadata(&output).unwrap().len() > 0);
+        let final_path = result_path.unwrap();
+        assert!(final_path.exists());
+        assert!(std::fs::metadata(&final_path).unwrap().len() > 0);
 
-        let _ = std::fs::remove_file(&output);
+        let _ = std::fs::remove_file(&final_path);
+    }
+
+    /// Reproduziert den gemeldeten Bug: Speichern-Dialog liefert einen Pfad ohne
+    /// `.mp4`-Endung -> ffmpeg konnte das Ausgabeformat nicht erraten und brach ab.
+    #[test]
+    #[ignore]
+    fn end_to_end_render_with_missing_extension_and_pcm_audio() {
+        let video = PathBuf::from(
+            "/private/tmp/claude-501/-Users-finn-Documents-Claude-Projekte/aba36461-16de-4927-9d42-fe3b6b08a779/scratchpad/subtest/test_pcm.mov",
+        );
+        assert!(video.exists(), "Test-Video fehlt unter {}", video.display());
+
+        let lines = vec![SubtitleLine {
+            start_ms: 0,
+            end_ms: 2000,
+            text: "Test ohne Endung".into(),
+            font: "Arial".into(),
+            font_size: 28,
+        }];
+
+        // Bewusst OHNE .mp4-Endung, wie es der native Speichern-Dialog liefern kann.
+        let output_without_ext = std::env::temp_dir().join("capcut-e2e-no-ext-output");
+        let _ = std::fs::remove_file(&output_without_ext);
+        let _ = std::fs::remove_file(output_without_ext.with_extension("mp4"));
+
+        let result = render_subtitled_video(&video, &lines, &output_without_ext);
+        assert!(result.is_ok(), "Render fehlgeschlagen: {:?}", result.err());
+        let final_path = result.unwrap();
+        assert_eq!(final_path.extension().unwrap(), "mp4");
+        assert!(final_path.exists());
+        assert!(std::fs::metadata(&final_path).unwrap().len() > 0);
+
+        let _ = std::fs::remove_file(&final_path);
     }
 }

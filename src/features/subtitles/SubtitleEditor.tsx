@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AVAILABLE_FONTS,
@@ -57,7 +57,9 @@ export function SubtitleEditor() {
       );
       setStatus(`${segments.length} Segmente transkribiert.`);
     } catch (e) {
-      setStatus(`Fehler bei der Transkription: ${e}`);
+      const msg = `Fehler bei der Transkription: ${e}`;
+      setStatus(msg);
+      await message(msg, { title: "Transkription fehlgeschlagen", kind: "error" });
     } finally {
       setBusy(false);
     }
@@ -74,24 +76,31 @@ export function SubtitleEditor() {
 
   async function renderVideo() {
     if (!videoPath || lines.length === 0) return;
-    const output = await save({
-      defaultPath: suggestedOutputPath(videoPath),
-      filters: [{ name: "Video", extensions: ["mp4"] }],
-    });
-    if (!output) return;
-
-    setBusy(true);
-    setStatus("Brenne Untertitel ins Video …");
     try {
+      const output = await save({
+        defaultPath: suggestedOutputPath(videoPath),
+        filters: [{ name: "Video", extensions: ["mp4"] }],
+      });
+      if (!output) return;
+
+      setBusy(true);
+      setStatus("Brenne Untertitel ins Video …");
+
       const outputPath = await invoke<string>("render_subtitled_video", {
         videoPath,
         lines,
         outputPath: output,
       });
       setStatus(`Fertig: ${outputPath}`);
+      await message(`Video gespeichert unter:\n${outputPath}`, {
+        title: "Rendern abgeschlossen",
+        kind: "info",
+      });
       await revealItemInDir(outputPath);
     } catch (e) {
-      setStatus(`Fehler beim Rendern: ${e}`);
+      const msg = `Fehler beim Rendern: ${e}`;
+      setStatus(msg);
+      await message(msg, { title: "Rendern fehlgeschlagen", kind: "error" });
     } finally {
       setBusy(false);
     }
