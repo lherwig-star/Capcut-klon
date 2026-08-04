@@ -124,6 +124,11 @@ pub fn transcribe_video(
         .arg("--output-json")
         .arg("-of")
         .arg(&out_prefix)
+        // Kurze, wortgruppenweise Segmente statt ganzer Sätze (TikTok-Stil):
+        // Untertitel folgen dem Sprechtempo statt als Blocktext stehenzubleiben.
+        .arg("-ml")
+        .arg("20")
+        .arg("-sow")
         .arg("-np");
     let transcribe_result = run(cmd);
 
@@ -169,9 +174,21 @@ fn sanitize_style_name(font: &str) -> String {
         .collect()
 }
 
+/// `line.font_size` wird als Referenzgröße bei 1920px Höhe interpretiert und linear
+/// auf die tatsächliche Videohöhe skaliert — sonst wirkt derselbe Zahlenwert auf einem
+/// 3840px-Hochformat-Handyvideo winzig, auf einem 360px-Testvideo riesig.
+fn scale_to_video_height(reference_size: u32, play_res_y: u32) -> u32 {
+    ((reference_size as f32 * play_res_y as f32 / 1920.0).round() as u32).max(1)
+}
+
 /// Baut eine ASS-Untertiteldatei; jede unterschiedliche Font/Größen-Kombination
 /// bekommt einen eigenen Style, damit pro Zeile eine andere Schriftart möglich ist.
+/// Style orientiert sich an typischen Social-Video-Untertiteln: fett, dicker Rand,
+/// deutlich über dem unteren Rand positioniert statt daran zu kleben.
 fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String {
+    let margin_v = (play_res_y as f32 * 0.28).round() as u32;
+    let margin_lr = (play_res_x as f32 * 0.05).round() as u32;
+
     let mut style_names: HashMap<(String, u32), String> = HashMap::new();
     let mut style_defs = String::new();
     let mut events = String::new();
@@ -180,11 +197,12 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
         let key = (line.font.clone(), line.font_size);
         let style_name = style_names.entry(key).or_insert_with(|| {
             let name = format!("S{}_{}", i, sanitize_style_name(&line.font));
+            let size = scale_to_video_height(line.font_size, play_res_y);
+            let outline = (size as f32 * 0.09).round().max(2.0) as u32;
             style_defs.push_str(&format!(
-                "Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,20,20,30,1\n",
+                "Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n",
                 name = name,
                 font = line.font,
-                size = line.font_size,
             ));
             name
         });
@@ -338,15 +356,27 @@ mod tests {
                 font_size: 28,
             },
         ];
-        let ass = build_ass(&lines, 640, 360);
+        // play_res_y = 1920 -> Referenzgröße (bei 1920px definiert) wird 1:1 übernommen
+        let ass = build_ass(&lines, 1080, 1920);
 
-        assert!(ass.contains("PlayResX: 640"));
+        assert!(ass.contains("PlayResX: 1080"));
         assert!(ass.contains("Style: S0_Arial,Arial,28"));
         assert!(ass.contains("Style: S1_Impact,Impact,34"));
+        // fett (Bold=-1) und mit sichtbarem Rand statt der alten Mini-Variante
+        assert!(ass.contains(",-1,0,0,0,100,100,0,0,1,"));
         // dritte Zeile nutzt denselben Style wie die erste (kein doppelter Style-Eintrag)
         assert_eq!(ass.matches("Fontname").count(), 1);
         assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00,S0_Arial,,0,0,0,,Hallo"));
         assert!(ass.contains("Dialogue: 0,0:00:02.00,0:00:03.00,S0_Arial,,0,0,0,,nochmal Arial"));
+    }
+
+    #[test]
+    fn scales_font_size_relative_to_video_height() {
+        // Referenz bei 1920px Höhe; auf einem 3840px hohen Hochformat-Handyvideo
+        // muss derselbe Wert doppelt so groß werden, sonst wirkt er winzig.
+        assert_eq!(scale_to_video_height(28, 1920), 28);
+        assert_eq!(scale_to_video_height(28, 3840), 56);
+        assert_eq!(scale_to_video_height(28, 960), 14);
     }
 
     #[test]
@@ -397,7 +427,7 @@ mod tests {
     #[ignore]
     fn end_to_end_render_with_missing_extension_and_pcm_audio() {
         let video = PathBuf::from(
-            "/private/tmp/claude-501/-Users-finn-Documents-Claude-Projekte/aba36461-16de-4927-9d42-fe3b6b08a779/scratchpad/subtest/test_pcm.mov",
+            "/private/tmp/claude-501/-Users-finn-Documents-Claude-Projekte/aba36461-16de-4927-9d42-fe3b6b08a779/scratchpad/subtest/test_1080x1920.mov",
         );
         assert!(video.exists(), "Test-Video fehlt unter {}", video.display());
 
