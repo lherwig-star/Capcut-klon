@@ -1,4 +1,4 @@
-import { useRef, type DragEvent } from "react";
+import { useRef, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { MediaAsset, Track } from "../../shared/types";
 import { MEDIA_ASSET_DRAG_TYPE } from "../../shared/dragTypes";
 import { ClipBlock } from "./ClipBlock";
@@ -14,6 +14,7 @@ interface TrackRowProps {
   onMoveClip: (clipId: string, trackId: string, start: number) => void;
   onTrimClip: (clipId: string, edge: "start" | "end", deltaSec: number) => void;
   onDropAsset: (trackId: string, assetId: string, startSec: number) => void;
+  onSeek: (sec: number) => void;
   onToggleMute: (trackId: string) => void;
   onToggleHidden: (trackId: string) => void;
 }
@@ -28,6 +29,7 @@ export function TrackRow({
   onMoveClip,
   onTrimClip,
   onDropAsset,
+  onSeek,
   onToggleMute,
   onToggleHidden,
 }: TrackRowProps) {
@@ -47,6 +49,14 @@ export function TrackRow({
     const rect = laneRef.current.getBoundingClientRect();
     const startSec = Math.max(0, (event.clientX - rect.left) / pxPerSec);
     onDropAsset(track.id, assetId, startSec);
+  }
+
+  function handleLanePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    // Only the empty lane seeks; a press that landed on a clip belongs to that clip's
+    // own drag handling.
+    if (event.target !== laneRef.current || !laneRef.current) return;
+    const rect = laneRef.current.getBoundingClientRect();
+    onSeek(Math.max(0, (event.clientX - rect.left) / pxPerSec));
   }
 
   return (
@@ -80,6 +90,7 @@ export function TrackRow({
         style={{ width: widthPx }}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
+        onPointerDown={handleLanePointerDown}
       >
         {track.clips.map((clip) => (
           <ClipBlock
