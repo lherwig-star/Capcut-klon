@@ -2,14 +2,17 @@ import type { DragEvent } from "react";
 import type { MediaAsset } from "../../shared/types";
 import { formatTimecode } from "../../shared/time";
 import { MEDIA_ASSET_DRAG_TYPE } from "../../shared/dragTypes";
+import type { ImportProgress } from "./useMediaLibrary";
 import "./MediaLibraryPanel.css";
 
 interface MediaLibraryPanelProps {
   assets: MediaAsset[];
   importing: boolean;
-  error: string | null;
+  progress: ImportProgress | null;
+  errors: string[];
   onImport: () => void;
   onRemove: (id: string) => void;
+  onDismissErrors: () => void;
 }
 
 const KIND_ICON: Record<MediaAsset["kind"], string> = {
@@ -18,11 +21,21 @@ const KIND_ICON: Record<MediaAsset["kind"], string> = {
   image: "\u{1F5BC}",
 };
 
-export function MediaLibraryPanel({ assets, importing, error, onImport, onRemove }: MediaLibraryPanelProps) {
+export function MediaLibraryPanel({
+  assets,
+  importing,
+  progress,
+  errors,
+  onImport,
+  onRemove,
+  onDismissErrors,
+}: MediaLibraryPanelProps) {
   function handleDragStart(event: DragEvent<HTMLDivElement>, asset: MediaAsset) {
     event.dataTransfer.setData(MEDIA_ASSET_DRAG_TYPE, asset.id);
     event.dataTransfer.effectAllowed = "copy";
   }
+
+  const percent = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
     <section className="media-library">
@@ -33,9 +46,38 @@ export function MediaLibraryPanel({ assets, importing, error, onImport, onRemove
         </button>
       </header>
 
-      {error && <p className="media-library__error">{error}</p>}
+      {progress && (
+        <div className="media-library__progress">
+          <div className="media-library__progress-track">
+            <div className="media-library__progress-bar" style={{ width: `${percent}%` }} />
+          </div>
+          <span className="media-library__progress-label">
+            {progress.done} / {progress.total}
+            {progress.currentName && ` — ${progress.currentName}`}
+          </span>
+        </div>
+      )}
 
-      {assets.length === 0 ? (
+      {errors.length > 0 && (
+        <div className="media-library__errors">
+          <button
+            type="button"
+            className="media-library__errors-dismiss"
+            onClick={onDismissErrors}
+            aria-label="Fehler ausblenden"
+          >
+            ×
+          </button>
+          <strong>{errors.length === 1 ? "Eine Datei" : `${errors.length} Dateien`} nicht importiert:</strong>
+          <ul>
+            {errors.map((message) => (
+              <li key={message}>{message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {assets.length === 0 && !importing ? (
         <p className="media-library__empty">
           Noch keine Medien importiert. Klicke auf „Importieren“, um Video-, Audio- oder Bilddateien
           hinzuzufügen.

@@ -50,9 +50,11 @@ function App() {
               <MediaLibraryPanel
                 assets={media.assets}
                 importing={media.importing}
-                error={media.error}
+                progress={media.progress}
+                errors={media.errors}
                 onImport={media.importFiles}
                 onRemove={media.removeAsset}
+                onDismissErrors={media.dismissErrors}
               />
             </aside>
             <div className="app__preview">

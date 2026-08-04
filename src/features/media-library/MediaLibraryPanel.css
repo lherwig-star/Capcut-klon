@@ -33,10 +33,61 @@
   line-height: 1.4;
 }
 
-.media-library__error {
-  font-size: 0.8rem;
-  color: #ff6b6b;
-  margin: 0;
+.media-library__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.media-library__progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.media-library__progress-bar {
+  height: 100%;
+  background: #396cd8;
+  transition: width 0.2s ease;
+}
+
+.media-library__progress-label {
+  font-size: 0.7rem;
+  opacity: 0.65;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-library__errors {
+  position: relative;
+  font-size: 0.72rem;
+  color: #ff8f8f;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 6px;
+  padding: 0.45rem 1.4rem 0.45rem 0.55rem;
+  line-height: 1.35;
+}
+
+.media-library__errors ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+}
+
+.media-library__errors-dismiss {
+  position: absolute;
+  top: 0.1rem;
+  right: 0.15rem;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.15rem 0.3rem;
+  cursor: pointer;
 }
 
 .media-library__grid {
