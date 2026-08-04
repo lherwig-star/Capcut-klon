@@ -1,0 +1,22 @@
+.timeline-ruler {
+  position: relative;
+  height: 28px;
+  background: var(--panel-bg, #202020);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.timeline-ruler__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  padding-left: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.timeline-ruler__label {
+  font-size: 0.65rem;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,56 @@
+.track-row {
+  display: flex;
+  height: 56px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.track-row__header {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  width: 140px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0 0.6rem;
+  background: var(--panel-bg, #202020);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.track-row__name {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-row__buttons {
+  display: flex;
+  gap: 0.15rem;
+}
+
+.track-row__buttons button {
+  padding: 0.1em 0.3em;
+  font-size: 0.75rem;
+  background: transparent;
+  box-shadow: none;
+  border-color: transparent;
+}
+
+.track-row__buttons button.is-active {
+  opacity: 0.5;
+}
+
+.track-row__lane {
+  position: relative;
+  flex-shrink: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 0,
+    rgba(255, 255, 255, 0.03) 1px,
+    transparent 1px,
+    transparent 40px
+  );
+}

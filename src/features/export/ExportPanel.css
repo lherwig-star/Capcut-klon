@@ -1,0 +1,105 @@
+.export-panel__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.export-panel {
+  width: 360px;
+  background: var(--panel-bg, #202020);
+  border-radius: 10px;
+  padding: 1rem 1.25rem 1.25rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.export-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.export-panel__header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.export-panel__header button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.3rem;
+}
+
+.export-panel__warning {
+  font-size: 0.78rem;
+  color: #ffb454;
+  margin: 0;
+}
+
+.export-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+}
+
+.export-panel__field--row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.export-panel__field label {
+  opacity: 0.7;
+}
+
+.export-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.export-panel__row input {
+  width: 80px;
+}
+
+.export-panel__progress {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.export-panel__progress-bar {
+  height: 100%;
+  background: #396cd8;
+  transition: width 0.2s ease;
+}
+
+.export-panel__message {
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.export-panel__message--error {
+  color: #ff6b6b;
+}
+
+.export-panel__message--done {
+  color: #6bd47b;
+}
+
+.export-panel__submit {
+  width: 100%;
+  font-weight: 600;
+}
