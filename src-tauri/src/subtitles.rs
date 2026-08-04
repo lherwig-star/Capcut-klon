@@ -65,6 +65,26 @@ fn extract_audio(video_path: &Path, out_wav: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Parst die Ausgabe von `ffprobe -of csv=p=0:s=x stream=width,height`.
+/// Manche ffprobe-Versionen hängen einen zusätzlichen Trenner ans Zeilenende
+/// (z.B. "2160x3840x" statt "2160x3840") — leere Teile daher rausfiltern.
+fn parse_resolution_csv(out: &str) -> Result<(u32, u32), String> {
+    let mut parts = out.trim().split('x').filter(|s| !s.is_empty());
+    let w: u32 = parts
+        .next()
+        .ok_or_else(|| "Videoauflösung konnte nicht ermittelt werden".to_string())?
+        .trim()
+        .parse()
+        .map_err(|_| "Ungültige Breite".to_string())?;
+    let h: u32 = parts
+        .next()
+        .ok_or_else(|| "Videoauflösung konnte nicht ermittelt werden".to_string())?
+        .trim()
+        .parse()
+        .map_err(|_| "Ungültige Höhe".to_string())?;
+    Ok((w, h))
+}
+
 pub fn get_video_resolution(video_path: &Path) -> Result<(u32, u32), String> {
     let mut cmd = Command::new("ffprobe");
     cmd.args([
@@ -79,13 +99,7 @@ pub fn get_video_resolution(video_path: &Path) -> Result<(u32, u32), String> {
     ])
     .arg(video_path);
     let out = run(cmd)?;
-    let (w, h) = out
-        .trim()
-        .split_once('x')
-        .ok_or_else(|| "Videoauflösung konnte nicht ermittelt werden".to_string())?;
-    let w: u32 = w.trim().parse().map_err(|_| "Ungültige Breite".to_string())?;
-    let h: u32 = h.trim().parse().map_err(|_| "Ungültige Höhe".to_string())?;
-    Ok((w, h))
+    parse_resolution_csv(&out)
 }
 
 /// Extrahiert die Audiospur aus dem Video und transkribiert sie lokal mit whisper.cpp.
@@ -262,6 +276,15 @@ pub fn render_subtitled_video(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_resolution_csv_with_trailing_separator() {
+        // Bug aus der Praxis (iPhone-Video, ffmpeg 9.0): ffprobe hängt einen
+        // zusätzlichen Trenner an, "Ungültige Höhe" flog beim naiven split_once.
+        assert_eq!(parse_resolution_csv("2160x3840x\n"), Ok((2160, 3840)));
+        assert_eq!(parse_resolution_csv("2160x3840x"), Ok((2160, 3840)));
+        assert_eq!(parse_resolution_csv("1920x1080\n"), Ok((1920, 1080)));
+    }
 
     #[test]
     fn normalizes_output_path_missing_or_wrong_extension() {
