@@ -28,6 +28,19 @@ Alles läuft rein client-seitig auf dem Gerät des Nutzers — kein Server-Backe
 
 Jedes Feature ist möglichst in sich geschlossen, damit zwei Personen parallel arbeiten können, ohne sich in denselben Dateien zu begegnen.
 
+## Untertitel — Implementierungsstand (feature/subtitles)
+
+Erster funktionsfähiger Durchstich, umgesetzt und end-to-end getestet:
+
+1. `ffmpeg` extrahiert die Audiospur aus dem Video (16kHz mono WAV).
+2. `whisper-cli` (whisper-cpp, Modell `ggml-small.bin`, lokal, per Metal-GPU beschleunigt) transkribiert mit Segment-Zeitstempeln.
+3. Jede Zeile ist im Frontend editierbar und bekommt eine frei wählbare Font zugewiesen.
+4. Beim Rendern wird daraus eine `.ass`-Untertiteldatei gebaut (ein `Style` pro genutzter Font/Größen-Kombination) und via `ffmpeg -vf ass=...` (libass) ins Video eingebrannt.
+
+Wichtig: Das reguläre `homebrew/core`-ffmpeg wird **ohne** libass gebaut — für den Burn-in ist die Community-Tap-Version nötig (`homebrew-ffmpeg/ffmpeg`). Siehe [README.md](../README.md#setup) für die Installationsbefehle.
+
+Aktuell rein CLI-basiert (Rust ruft `ffmpeg`/`whisper-cli` als Subprozesse auf, kein Sidecar-Bundling). Für einen Produktionsbuild müssten diese Binaries + das Modell als Tauri-Sidecar bzw. ins App-Datenverzeichnis gebündelt werden, statt sich auf global installierte Homebrew-Pakete zu verlassen — das ist bewusst zurückgestellt, um zuerst die Kernlogik zu validieren.
+
 ## Warum keine cloud-basierte Verarbeitung
 
 Bewusste Entscheidung: einfachere Architektur (keine Queue, kein Storage-Backend, keine Server-Kosten), Verarbeitung bleibt privat auf dem Gerät. Falls das Projekt später doch serverseitiges Rendering braucht (z.B. für sehr lange Exporte), kann `features/export` durch einen Remote-Worker ersetzt werden, ohne den Rest der App anzufassen.
