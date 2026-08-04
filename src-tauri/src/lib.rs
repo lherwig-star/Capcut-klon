@@ -1,13 +1,8 @@
+mod export;
 mod subtitles;
 
 use std::path::PathBuf;
 use subtitles::{SubtitleLine, TranscriptSegment};
-
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[tauri::command]
 fn default_whisper_model_path() -> String {
@@ -53,10 +48,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            greet,
+            export::export_video,
+            export::check_ffmpeg_available,
             default_whisper_model_path,
             transcribe_video,
-            render_subtitled_video
+            render_subtitled_video,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,0 +1,67 @@
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  height: 100%;
+  min-height: 0;
+  padding: 1.5rem;
+  box-sizing: border-box;
+}
+
+.preview-panel__stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.preview-panel__stage canvas {
+  max-width: 100%;
+  max-height: 100%;
+  background: #000;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-stage);
+}
+
+.preview-panel__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.preview-panel__controls button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 0.9rem;
+  border-radius: var(--radius-md);
+}
+
+/* Mittlerer Button = Play/Pause: größer, rund, primärfarben */
+.preview-panel__controls button:nth-child(2) {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+  font-size: 1.05rem;
+}
+
+.preview-panel__controls button:nth-child(2):hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.preview-panel__timecode {
+  margin-left: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted-foreground);
+}
