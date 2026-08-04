@@ -31,12 +31,38 @@ curl -L -o models/ggml-small.bin \
 
 `models/` ist in `.gitignore` — jeder lädt sich das Modell einmal lokal selbst.
 
+### Windows
+
+Ein Skript erledigt Voraussetzungen, Build und Desktop-Verknüpfung in einem:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
+```
+
+Es installiert fehlende Voraussetzungen (Node, Rust, ffmpeg, WebView2) über winget,
+baut die App und legt „CapCut-Klon" auf dem Desktop ab. Mehrfach ausführbar.
+Mit `-Bundle` entstehen zusätzlich MSI/NSIS-Installer, mit `-SkipDependencies`
+wird nur gebaut.
+
+Zusätzlich nötig, weil winget das nicht mitbringt: die **MSVC-Build-Tools**
+([Download](https://visualstudio.microsoft.com/visual-cpp-build-tools/), beim
+Installer „Desktopentwicklung mit C++" anhaken). Rust braucht sie zum Linken.
+
+Für Untertitel-Transkription zusätzlich `whisper-cli` im PATH und das Modell
+unter `models/ggml-small.bin` (Download-URL siehe macOS-Abschnitt oben).
+
 ## Entwicklung
 
 ```bash
 npm install
 npm run tauri dev
 ```
+
+`tauri dev` braucht ein offenes Terminal — Vite und der Rust-Watcher laufen darin
+und geben dort ihre Fehler aus. Ein fensterloser Start geht nur über die gebaute
+`.exe` (siehe Windows-Abschnitt). Eine Verknüpfung dorthin legt man per
+Rechtsklick → *Senden an* → *Desktop (Verknüpfung erstellen)* an; die Datei selbst
+auf den Desktop zu ziehen verschiebt sie stattdessen.
 
 - `npm run build` — Typecheck + Vite-Build
 - `npm run lint` — ESLint
