@@ -118,7 +118,7 @@ export function SubtitleEditor() {
       </div>
 
       <div className="row">
-        <button onClick={transcribe} disabled={!videoPath || busy}>
+        <button className="btn-primary" onClick={transcribe} disabled={!videoPath || busy}>
           Transkribieren
         </button>
         <label>
@@ -162,7 +162,7 @@ export function SubtitleEditor() {
             ))}
           </ul>
 
-          <button onClick={renderVideo} disabled={busy}>
+          <button className="btn-primary btn-block" onClick={renderVideo} disabled={busy}>
             Video mit Untertiteln rendern
           </button>
         </>
