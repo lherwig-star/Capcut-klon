@@ -5,10 +5,29 @@ use std::process::Command;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct WordTiming {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct TranscriptSegment {
     pub start_ms: i64,
     pub end_ms: i64,
     pub text: String,
+    pub words: Vec<WordTiming>,
+}
+
+/// Drei Untertitel-Stile zur Auswahl. `WordHighlight` braucht die Wort-Zeitstempel
+/// aus `TranscriptSegment::words`, die anderen ignorieren sie.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubtitleStyle {
+    Classic,
+    Box,
+    WordHighlight,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -19,6 +38,9 @@ pub struct SubtitleLine {
     pub text: String,
     pub font: String,
     pub font_size: u32,
+    pub style: SubtitleStyle,
+    #[serde(default)]
+    pub words: Vec<WordTiming>,
 }
 
 #[derive(Deserialize)]
@@ -102,7 +124,57 @@ pub fn get_video_resolution(video_path: &Path) -> Result<(u32, u32), String> {
     parse_resolution_csv(&out)
 }
 
-/// Extrahiert die Audiospur aus dem Video und transkribiert sie lokal mit whisper.cpp.
+const MAX_WORDS_PER_LINE: usize = 5;
+const MAX_GAP_MS_WITHIN_LINE: i64 = 600;
+
+/// Gruppiert wortgenaue Zeitstempel zu kurzen, TikTok-artigen Zeilen (max. 5 Wörter,
+/// neue Zeile bei einer Sprechpause > 600ms). Die Wortliste jeder Zeile bleibt für den
+/// Wort-Highlight-Stil erhalten.
+fn group_words_into_lines(words: &[WordTiming]) -> Vec<TranscriptSegment> {
+    let mut lines = Vec::new();
+    let mut current: Vec<WordTiming> = Vec::new();
+
+    for word in words {
+        if word.text.trim().is_empty() {
+            continue;
+        }
+        if let Some(last) = current.last() {
+            let gap = word.start_ms - last.end_ms;
+            if current.len() >= MAX_WORDS_PER_LINE || gap > MAX_GAP_MS_WITHIN_LINE {
+                lines.push(finish_line(std::mem::take(&mut current)));
+            }
+        }
+        current.push(WordTiming {
+            start_ms: word.start_ms,
+            end_ms: word.end_ms,
+            text: word.text.trim().to_string(),
+        });
+    }
+    if !current.is_empty() {
+        lines.push(finish_line(current));
+    }
+    lines
+}
+
+fn finish_line(words: Vec<WordTiming>) -> TranscriptSegment {
+    let start_ms = words.first().map(|w| w.start_ms).unwrap_or(0);
+    let end_ms = words.last().map(|w| w.end_ms).unwrap_or(start_ms);
+    let text = words
+        .iter()
+        .map(|w| w.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    TranscriptSegment {
+        start_ms,
+        end_ms,
+        text,
+        words,
+    }
+}
+
+/// Extrahiert die Audiospur aus dem Video und transkribiert sie lokal mit whisper.cpp,
+/// wortgenau (`-ml 1 -sow` zwingt whisper, ein Wort pro Segment mit eigenem Zeitstempel
+/// auszugeben). Die Wörter werden anschließend zu kurzen Zeilen gruppiert.
 pub fn transcribe_video(
     video_path: &Path,
     model_path: &Path,
@@ -124,10 +196,9 @@ pub fn transcribe_video(
         .arg("--output-json")
         .arg("-of")
         .arg(&out_prefix)
-        // Kurze, wortgruppenweise Segmente statt ganzer Sätze (TikTok-Stil):
-        // Untertitel folgen dem Sprechtempo statt als Blocktext stehenzubleiben.
+        // Ein Wort pro Segment mit eigenem Zeitstempel (Basis fürs Wort-Highlight).
         .arg("-ml")
-        .arg("20")
+        .arg("1")
         .arg("-sow")
         .arg("-np");
     let transcribe_result = run(cmd);
@@ -144,15 +215,17 @@ pub fn transcribe_video(
     let parsed: WhisperJson = serde_json::from_str(&json_str)
         .map_err(|e| format!("Transkript-JSON ungültig: {e}"))?;
 
-    Ok(parsed
+    let words: Vec<WordTiming> = parsed
         .transcription
         .into_iter()
-        .map(|s| TranscriptSegment {
+        .map(|s| WordTiming {
             start_ms: s.offsets.from,
             end_ms: s.offsets.to,
-            text: s.text.trim().to_string(),
+            text: s.text,
         })
-        .collect())
+        .collect();
+
+    Ok(group_words_into_lines(&words))
 }
 
 fn format_ass_time(ms: i64) -> String {
@@ -181,39 +254,110 @@ fn scale_to_video_height(reference_size: u32, play_res_y: u32) -> u32 {
     ((reference_size as f32 * play_res_y as f32 / 1920.0).round() as u32).max(1)
 }
 
-/// Baut eine ASS-Untertiteldatei; jede unterschiedliche Font/Größen-Kombination
-/// bekommt einen eigenen Style, damit pro Zeile eine andere Schriftart möglich ist.
-/// Style orientiert sich an typischen Social-Video-Untertiteln: fett, dicker Rand,
-/// deutlich über dem unteren Rand positioniert statt daran zu kleben.
-fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String {
-    let margin_v = (play_res_y as f32 * 0.28).round() as u32;
-    let margin_lr = (play_res_x as f32 * 0.05).round() as u32;
+/// Akzentfarbe fürs Wort-Highlight (Gold/Gelb), als ASS-Inline-Override-Farbe (&HBBGGRR&).
+const ACCENT_COLOR_INLINE: &str = "&H00D7FF&";
+/// Weiß als ASS-Inline-Override-Farbe, zum Zurücksetzen nach dem hervorgehobenen Wort.
+const WHITE_COLOR_INLINE: &str = "&HFFFFFF&";
 
-    let mut style_names: HashMap<(String, u32), String> = HashMap::new();
-    let mut style_defs = String::new();
-    let mut events = String::new();
-
-    for (i, line) in lines.iter().enumerate() {
-        let key = (line.font.clone(), line.font_size);
-        let style_name = style_names.entry(key).or_insert_with(|| {
-            let name = format!("S{}_{}", i, sanitize_style_name(&line.font));
-            let size = scale_to_video_height(line.font_size, play_res_y);
+fn style_definition(
+    name: &str,
+    font: &str,
+    size: u32,
+    style: SubtitleStyle,
+    margin_lr: u32,
+    margin_v: u32,
+) -> String {
+    match style {
+        SubtitleStyle::Classic | SubtitleStyle::WordHighlight => {
             let outline = (size as f32 * 0.09).round().max(2.0) as u32;
-            style_defs.push_str(&format!(
-                "Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n",
-                name = name,
-                font = line.font,
-            ));
-            name
-        });
+            format!(
+                "Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n"
+            )
+        }
+        SubtitleStyle::Box => {
+            // BorderStyle=3: libass füllt die Box mit OutlineColour (nicht BackColour!),
+            // "Outline" steuert dabei die Boxpolsterung. Schwarze Schrift auf Gold-Balken.
+            format!(
+                "Style: {name},{font},{size},&H00000000,&H000000FF,&H0000D7FF,&H00000000,-1,0,0,0,100,100,0,0,3,4,0,2,{margin_lr},{margin_lr},{margin_v},1\n"
+            )
+        }
+    }
+}
 
-        events.push_str(&format!(
+/// Baut für eine Wort-Highlight-Zeile mehrere Dialogue-Events (eins pro Wort-Zeitfenster),
+/// bei denen jeweils genau das gerade gesprochene Wort per Inline-Farb-Tag hervorgehoben ist.
+fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
+    if line.words.is_empty() {
+        // Fallback ohne Wortdaten: ganze Zeile wie im klassischen Stil anzeigen.
+        return format!(
             "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
             start = format_ass_time(line.start_ms),
             end = format_ass_time(line.end_ms),
             style = style_name,
             text = escape_ass_text(&line.text),
+        );
+    }
+
+    let mut events = String::new();
+    for (i, active) in line.words.iter().enumerate() {
+        let text = line
+            .words
+            .iter()
+            .enumerate()
+            .map(|(j, w)| {
+                let escaped = escape_ass_text(&w.text);
+                if j == i {
+                    format!("{{\\c{ACCENT_COLOR_INLINE}}}{escaped}{{\\c{WHITE_COLOR_INLINE}}}")
+                } else {
+                    escaped
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        events.push_str(&format!(
+            "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
+            start = format_ass_time(active.start_ms),
+            end = format_ass_time(active.end_ms),
+            style = style_name,
         ));
+    }
+    events
+}
+
+/// Baut eine ASS-Untertiteldatei; jede Font/Größen/Stil-Kombination bekommt einen
+/// eigenen Style. Drei Stile stehen zur Wahl: klassisch (fett, Rand), Box (Blickfang-
+/// Balken) und Wort-Highlight (das gerade gesprochene Wort leuchtet farbig auf).
+fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String {
+    let margin_v = (play_res_y as f32 * 0.28).round() as u32;
+    let margin_lr = (play_res_x as f32 * 0.05).round() as u32;
+
+    let mut style_names: HashMap<(String, u32, SubtitleStyle), String> = HashMap::new();
+    let mut style_defs = String::new();
+    let mut events = String::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let key = (line.font.clone(), line.font_size, line.style);
+        let style_name = style_names.entry(key).or_insert_with(|| {
+            let name = format!("S{}_{}", i, sanitize_style_name(&line.font));
+            let size = scale_to_video_height(line.font_size, play_res_y);
+            style_defs.push_str(&style_definition(
+                &name, &line.font, size, line.style, margin_lr, margin_v,
+            ));
+            name
+        });
+
+        if line.style == SubtitleStyle::WordHighlight {
+            events.push_str(&word_highlight_events(line, style_name));
+        } else {
+            events.push_str(&format!(
+                "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
+                start = format_ass_time(line.start_ms),
+                end = format_ass_time(line.end_ms),
+                style = style_name,
+                text = escape_ass_text(&line.text),
+            ));
+        }
     }
 
     format!(
@@ -242,7 +386,7 @@ fn normalize_output_path(output_path: &Path) -> PathBuf {
     }
 }
 
-/// Brennt die übergebenen Untertitel-Zeilen (mit individueller Font pro Zeile) ins Video ein.
+/// Brennt die übergebenen Untertitel-Zeilen (mit individueller Font/Stil pro Zeile) ins Video ein.
 /// Gibt den tatsächlich geschriebenen Ausgabepfad zurück (kann von `output_path` abweichen,
 /// falls dort die `.mp4`-Endung gefehlt hat).
 pub fn render_subtitled_video(
@@ -295,6 +439,26 @@ pub fn render_subtitled_video(
 mod tests {
     use super::*;
 
+    fn word(start_ms: i64, end_ms: i64, text: &str) -> WordTiming {
+        WordTiming {
+            start_ms,
+            end_ms,
+            text: text.to_string(),
+        }
+    }
+
+    fn line(text: &str, start_ms: i64, end_ms: i64, style: SubtitleStyle) -> SubtitleLine {
+        SubtitleLine {
+            start_ms,
+            end_ms,
+            text: text.to_string(),
+            font: "Arial".into(),
+            font_size: 28,
+            style,
+            words: Vec::new(),
+        }
+    }
+
     #[test]
     fn parses_resolution_csv_with_trailing_separator() {
         // Bug aus der Praxis (iPhone-Video, ffmpeg 9.0): ffprobe hängt einen
@@ -332,29 +496,37 @@ mod tests {
     }
 
     #[test]
+    fn groups_words_by_count_and_pause() {
+        let words = vec![
+            word(0, 200, " Hallo"),
+            word(200, 400, " und"),
+            word(400, 600, " herzlich"),
+            word(600, 800, " willkommen"),
+            word(800, 1000, " heute"),
+            // 6. Wort -> neue Zeile wegen MAX_WORDS_PER_LINE
+            word(1000, 1200, " zusammen"),
+            // grosse Pause -> neue Zeile
+            word(3000, 3200, " Tschüss"),
+        ];
+        let lines = group_words_into_lines(&words);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "Hallo und herzlich willkommen heute");
+        assert_eq!(lines[0].words.len(), 5);
+        assert_eq!(lines[1].text, "zusammen");
+        assert_eq!(lines[2].text, "Tschüss");
+        assert_eq!(lines[2].start_ms, 3000);
+    }
+
+    #[test]
     fn builds_ass_with_shared_and_distinct_styles() {
         let lines = vec![
+            line("Hallo", 0, 1000, SubtitleStyle::Classic),
             SubtitleLine {
-                start_ms: 0,
-                end_ms: 1000,
-                text: "Hallo".into(),
-                font: "Arial".into(),
-                font_size: 28,
-            },
-            SubtitleLine {
-                start_ms: 1000,
-                end_ms: 2000,
-                text: "Welt".into(),
                 font: "Impact".into(),
                 font_size: 34,
+                ..line("Welt", 1000, 2000, SubtitleStyle::Classic)
             },
-            SubtitleLine {
-                start_ms: 2000,
-                end_ms: 3000,
-                text: "nochmal Arial".into(),
-                font: "Arial".into(),
-                font_size: 28,
-            },
+            line("nochmal Arial", 2000, 3000, SubtitleStyle::Classic),
         ];
         // play_res_y = 1920 -> Referenzgröße (bei 1920px definiert) wird 1:1 übernommen
         let ass = build_ass(&lines, 1080, 1920);
@@ -371,12 +543,26 @@ mod tests {
     }
 
     #[test]
-    fn scales_font_size_relative_to_video_height() {
-        // Referenz bei 1920px Höhe; auf einem 3840px hohen Hochformat-Handyvideo
-        // muss derselbe Wert doppelt so groß werden, sonst wirkt er winzig.
-        assert_eq!(scale_to_video_height(28, 1920), 28);
-        assert_eq!(scale_to_video_height(28, 3840), 56);
-        assert_eq!(scale_to_video_height(28, 960), 14);
+    fn box_style_uses_border_style_three_with_accent_outline_colour() {
+        // libass füllt bei BorderStyle=3 die Box mit OutlineColour, nicht BackColour —
+        // das war ein realer Bug (schwarze Box, unsichtbarer Text), hier festgehalten.
+        let lines = vec![line("Achtung", 0, 1000, SubtitleStyle::Box)];
+        let ass = build_ass(&lines, 1080, 1920);
+        assert!(ass.contains("&H0000D7FF,&H00000000,-1,0,0,0,100,100,0,0,3,4,0,2,"));
+    }
+
+    #[test]
+    fn word_highlight_emits_one_event_per_word_with_accent_tag() {
+        let mut l = line("Hallo Welt", 0, 1000, SubtitleStyle::WordHighlight);
+        l.words = vec![word(0, 400, "Hallo"), word(400, 1000, "Welt")];
+        let ass = build_ass(&[l], 1080, 1920);
+
+        assert_eq!(ass.matches("Dialogue:").count(), 2);
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:00.40"));
+        assert!(ass.contains("Dialogue: 0,0:00:00.40,0:00:01.00"));
+        // erstes Event hebt "Hallo" hervor, zweites "Welt"
+        assert!(ass.contains(&format!("{{\\c{ACCENT_COLOR_INLINE}}}Hallo{{\\c{WHITE_COLOR_INLINE}}} Welt")));
+        assert!(ass.contains(&format!("Hallo {{\\c{ACCENT_COLOR_INLINE}}}Welt{{\\c{WHITE_COLOR_INLINE}}}")));
     }
 
     #[test]
@@ -399,6 +585,7 @@ mod tests {
         assert!(!segments.is_empty(), "keine Segmente transkribiert");
         assert!(segments[0].text.to_lowercase().contains("hallo"));
 
+        let styles = [SubtitleStyle::Classic, SubtitleStyle::Box, SubtitleStyle::WordHighlight];
         let lines: Vec<SubtitleLine> = segments
             .into_iter()
             .enumerate()
@@ -408,6 +595,8 @@ mod tests {
                 text: s.text,
                 font: if i % 2 == 0 { "Arial".into() } else { "Impact".into() },
                 font_size: 28,
+                style: styles[i % styles.len()],
+                words: s.words,
             })
             .collect();
 
@@ -427,17 +616,11 @@ mod tests {
     #[ignore]
     fn end_to_end_render_with_missing_extension_and_pcm_audio() {
         let video = PathBuf::from(
-            "/private/tmp/claude-501/-Users-finn-Documents-Claude-Projekte/aba36461-16de-4927-9d42-fe3b6b08a779/scratchpad/subtest/test_1080x1920.mov",
+            "/private/tmp/claude-501/-Users-finn-Documents-Claude-Projekte/aba36461-16de-4927-9d42-fe3b6b08a779/scratchpad/subtest/test_1080x1920_full.mov",
         );
         assert!(video.exists(), "Test-Video fehlt unter {}", video.display());
 
-        let lines = vec![SubtitleLine {
-            start_ms: 0,
-            end_ms: 2000,
-            text: "Test ohne Endung".into(),
-            font: "Arial".into(),
-            font_size: 28,
-        }];
+        let lines = vec![line("Test ohne Endung", 0, 2000, SubtitleStyle::Classic)];
 
         // Bewusst OHNE .mp4-Endung, wie es der native Speichern-Dialog liefern kann.
         let output_without_ext = std::env::temp_dir().join("capcut-e2e-no-ext-output");
