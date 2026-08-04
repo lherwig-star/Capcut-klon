@@ -55,6 +55,7 @@ function App() {
                 onImport={media.importFiles}
                 onRemove={media.removeAsset}
                 onDismissErrors={media.dismissErrors}
+                onAddToTimeline={timelineApi.appendAsset}
               />
             </aside>
             <div className="app__preview">

@@ -13,6 +13,7 @@ interface MediaLibraryPanelProps {
   onImport: () => void;
   onRemove: (id: string) => void;
   onDismissErrors: () => void;
+  onAddToTimeline: (asset: MediaAsset) => void;
 }
 
 const KIND_ICON: Record<MediaAsset["kind"], string> = {
@@ -29,6 +30,7 @@ export function MediaLibraryPanel({
   onImport,
   onRemove,
   onDismissErrors,
+  onAddToTimeline,
 }: MediaLibraryPanelProps) {
   function handleDragStart(event: DragEvent<HTMLDivElement>, asset: MediaAsset) {
     event.dataTransfer.setData(MEDIA_ASSET_DRAG_TYPE, asset.id);
@@ -90,7 +92,8 @@ export function MediaLibraryPanel({
               className="media-card"
               draggable
               onDragStart={(event) => handleDragStart(event, asset)}
-              title={asset.path}
+              onDoubleClick={() => onAddToTimeline(asset)}
+              title={`${asset.path}\n\nDoppelklick fügt den Clip ans Ende der Spur an.`}
             >
               <div className="media-card__thumb">
                 {asset.thumbnailUrl ? (
@@ -116,6 +119,10 @@ export function MediaLibraryPanel({
             </div>
           ))}
         </div>
+      )}
+
+      {assets.length > 0 && (
+        <p className="media-library__hint">Auf eine Spur ziehen oder doppelklicken zum Anhängen.</p>
       )}
     </section>
   );
