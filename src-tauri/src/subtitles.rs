@@ -30,6 +30,10 @@ pub enum SubtitleStyle {
     WordHighlight,
 }
 
+fn default_accent_color() -> String {
+    DEFAULT_ACCENT_COLOR_HEX.to_string()
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleLine {
@@ -39,6 +43,10 @@ pub struct SubtitleLine {
     pub font: String,
     pub font_size: u32,
     pub style: SubtitleStyle,
+    /// Hex-Farbe (`#RRGGBB`), genutzt für den Box-Hintergrund bzw. das hervorgehobene
+    /// Wort beim Wort-Highlight-Stil. Bei `Classic` ungenutzt.
+    #[serde(default = "default_accent_color")]
+    pub accent_color: String,
     #[serde(default)]
     pub words: Vec<WordTiming>,
 }
@@ -254,39 +262,88 @@ fn scale_to_video_height(reference_size: u32, play_res_y: u32) -> u32 {
     ((reference_size as f32 * play_res_y as f32 / 1920.0).round() as u32).max(1)
 }
 
-/// Akzentfarbe fürs Wort-Highlight (Gold/Gelb), als ASS-Inline-Override-Farbe (&HBBGGRR&).
-const ACCENT_COLOR_INLINE: &str = "&H00D7FF&";
+/// Default-Akzentfarbe (kräftiges Gelb), falls das Frontend keine eigene mitschickt.
+const DEFAULT_ACCENT_COLOR_HEX: &str = "#FFD400";
 /// Weiß als ASS-Inline-Override-Farbe, zum Zurücksetzen nach dem hervorgehobenen Wort.
 const WHITE_COLOR_INLINE: &str = "&HFFFFFF&";
+/// Das Wort-Highlight etwas später als whisper's Zeitstempel starten/enden lassen —
+/// gefühlt kam die Hervorhebung sonst, bevor das Wort tatsächlich zu hören war.
+const WORD_HIGHLIGHT_DELAY_MS: i64 = 90;
 
-fn style_definition(
-    name: &str,
-    font: &str,
-    size: u32,
-    style: SubtitleStyle,
-    margin_lr: u32,
-    margin_v: u32,
-) -> String {
-    match style {
-        SubtitleStyle::Classic | SubtitleStyle::WordHighlight => {
-            let outline = (size as f32 * 0.09).round().max(2.0) as u32;
-            format!(
-                "Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n"
-            )
-        }
-        SubtitleStyle::Box => {
-            // BorderStyle=3: libass füllt die Box mit OutlineColour (nicht BackColour!),
-            // "Outline" steuert dabei die Boxpolsterung. Schwarze Schrift auf Gold-Balken.
-            format!(
-                "Style: {name},{font},{size},&H00000000,&H000000FF,&H0000D7FF,&H00000000,-1,0,0,0,100,100,0,0,3,4,0,2,{margin_lr},{margin_lr},{margin_v},1\n"
-            )
-        }
+fn parse_hex_rgb(hex: &str) -> (u8, u8, u8) {
+    let h = hex.trim_start_matches('#');
+    if h.len() != 6 {
+        return (0xFF, 0xD4, 0x00);
     }
+    let r = u8::from_str_radix(&h[0..2], 16).unwrap_or(0xFF);
+    let g = u8::from_str_radix(&h[2..4], 16).unwrap_or(0xD4);
+    let b = u8::from_str_radix(&h[4..6], 16).unwrap_or(0x00);
+    (r, g, b)
+}
+
+/// Hex-Farbe (`#RRGGBB`) als ASS-Inline-Override-Farbe (`&HBBGGRR&`), für `{\c...}`-Tags.
+fn hex_to_ass_inline(hex: &str) -> String {
+    let (r, g, b) = parse_hex_rgb(hex);
+    format!("&H{b:02X}{g:02X}{r:02X}&")
+}
+
+/// Hex-Farbe (`#RRGGBB`) als ASS-Style-Farbfeld (`&HAABBGGRR`, hier immer opak).
+fn hex_to_ass_style_color(hex: &str) -> String {
+    let (r, g, b) = parse_hex_rgb(hex);
+    format!("&H00{b:02X}{g:02X}{r:02X}")
+}
+
+fn style_definition(name: &str, font: &str, size: u32, margin_lr: u32, margin_v: u32) -> String {
+    // Gilt für Classic und WordHighlight: fette weiße Schrift mit dickem Rand.
+    let outline = (size as f32 * 0.09).round().max(2.0) as u32;
+    format!(
+        "Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n"
+    )
+}
+
+/// Reiner Füll-Style für das gezeichnete Box-Rechteck (`\p`-Vektorobjekt nutzt PrimaryColour
+/// als Füllfarbe). Fontname/Fontsize sind hier irrelevant, aber vom ASS-Format verlangt.
+fn box_bg_style_definition(name: &str, accent_color_hex: &str) -> String {
+    let fill = hex_to_ass_style_color(accent_color_hex);
+    format!("Style: {name},Arial,10,{fill},&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n")
+}
+
+/// Text-Style fürs Box-Layer: schwarze, fette Schrift ohne eigenen Rand (liegt auf der
+/// bereits kontrastreichen Fläche).
+fn box_text_style_definition(name: &str, font: &str, size: u32) -> String {
+    format!("Style: {name},{font},{size},&H00000000,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n")
+}
+
+/// Schätzt die gerenderte Breite/Höhe einer Zeile grob anhand der Zeichenanzahl, um das
+/// Hintergrund-Rechteck der Box passend zu dimensionieren. Keine echte Textmetrik (die hat
+/// nur libass zur Renderzeit) — Faktoren wurden gegen echtes Rendern kalibriert.
+fn estimate_box_size(text: &str, size: u32) -> (f32, f32) {
+    let char_count = text.chars().count().max(1) as f32;
+    let size = size as f32;
+    let avg_char_width = size * 0.58;
+    let padding_x = size * 0.5;
+    let padding_y = size * 0.28;
+    let width = char_count * avg_char_width + padding_x * 2.0;
+    let height = size * 1.2 + padding_y * 2.0;
+    (width, height)
+}
+
+/// Zeichnet ein abgerundetes Rechteck (Breite `w`, Höhe `h`, Eckradius `r`) als ASS-`\p`-
+/// Drawing-Pfad, Ursprung oben links bei (0,0). Ecken werden per Bezier angenähert.
+fn rounded_rect_drawing(w: f32, h: f32, r: f32) -> String {
+    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
+    let wr = w - r;
+    let hr = h - r;
+    format!(
+        "m {r:.0} 0 l {wr:.0} 0 b {w:.0} 0 {w:.0} 0 {w:.0} {r:.0} l {w:.0} {hr:.0} b {w:.0} {h:.0} {w:.0} {h:.0} {wr:.0} {h:.0} l {r:.0} {h:.0} b 0 {h:.0} 0 {h:.0} 0 {hr:.0} l 0 {r:.0} b 0 0 0 0 {r:.0} 0"
+    )
 }
 
 /// Baut für eine Wort-Highlight-Zeile mehrere Dialogue-Events (eins pro Wort-Zeitfenster),
 /// bei denen jeweils genau das gerade gesprochene Wort per Inline-Farb-Tag hervorgehoben ist.
 fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
+    let accent_inline = hex_to_ass_inline(&line.accent_color);
+
     if line.words.is_empty() {
         // Fallback ohne Wortdaten: ganze Zeile wie im klassischen Stil anzeigen.
         return format!(
@@ -307,7 +364,7 @@ fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
             .map(|(j, w)| {
                 let escaped = escape_ass_text(&w.text);
                 if j == i {
-                    format!("{{\\c{ACCENT_COLOR_INLINE}}}{escaped}{{\\c{WHITE_COLOR_INLINE}}}")
+                    format!("{{\\c{accent_inline}}}{escaped}{{\\c{WHITE_COLOR_INLINE}}}")
                 } else {
                     escaped
                 }
@@ -317,46 +374,97 @@ fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
 
         events.push_str(&format!(
             "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
-            start = format_ass_time(active.start_ms),
-            end = format_ass_time(active.end_ms),
+            start = format_ass_time(active.start_ms + WORD_HIGHLIGHT_DELAY_MS),
+            end = format_ass_time(active.end_ms + WORD_HIGHLIGHT_DELAY_MS),
             style = style_name,
         ));
     }
     events
 }
 
-/// Baut eine ASS-Untertiteldatei; jede Font/Größen/Stil-Kombination bekommt einen
-/// eigenen Style. Drei Stile stehen zur Wahl: klassisch (fett, Rand), Box (Blickfang-
-/// Balken) und Wort-Highlight (das gerade gesprochene Wort leuchtet farbig auf).
+/// Baut eine ASS-Untertiteldatei; jede Font/Größen/Stil/Farb-Kombination bekommt einen
+/// eigenen Style. Drei Stile stehen zur Wahl: klassisch (fett, Rand), Box (gezeichnetes
+/// abgerundetes Rechteck als Hintergrund) und Wort-Highlight (aktuelles Wort leuchtet auf).
 fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String {
     let margin_v = (play_res_y as f32 * 0.28).round() as u32;
     let margin_lr = (play_res_x as f32 * 0.05).round() as u32;
+    let cx = play_res_x as f32 / 2.0;
+    let cy = (play_res_y as f32 - margin_v as f32).max(0.0);
 
-    let mut style_names: HashMap<(String, u32, SubtitleStyle), String> = HashMap::new();
+    let mut style_names: HashMap<String, String> = HashMap::new();
     let mut style_defs = String::new();
     let mut events = String::new();
+    let mut counter = 0usize;
 
-    for (i, line) in lines.iter().enumerate() {
-        let key = (line.font.clone(), line.font_size, line.style);
-        let style_name = style_names.entry(key).or_insert_with(|| {
-            let name = format!("S{}_{}", i, sanitize_style_name(&line.font));
-            let size = scale_to_video_height(line.font_size, play_res_y);
-            style_defs.push_str(&style_definition(
-                &name, &line.font, size, line.style, margin_lr, margin_v,
-            ));
-            name
-        });
+    for line in lines {
+        let size = scale_to_video_height(line.font_size, play_res_y);
 
-        if line.style == SubtitleStyle::WordHighlight {
-            events.push_str(&word_highlight_events(line, style_name));
-        } else {
-            events.push_str(&format!(
-                "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
-                start = format_ass_time(line.start_ms),
-                end = format_ass_time(line.end_ms),
-                style = style_name,
-                text = escape_ass_text(&line.text),
-            ));
+        match line.style {
+            SubtitleStyle::Box => {
+                let bg_key = format!("boxbg|{}", line.accent_color);
+                let bg_style = style_names
+                    .entry(bg_key)
+                    .or_insert_with(|| {
+                        counter += 1;
+                        let name = format!("SB{counter}");
+                        style_defs.push_str(&box_bg_style_definition(&name, &line.accent_color));
+                        name
+                    })
+                    .clone();
+
+                let text_key = format!("boxtext|{}|{size}", line.font);
+                let text_style = style_names
+                    .entry(text_key)
+                    .or_insert_with(|| {
+                        counter += 1;
+                        let name = format!("ST{counter}");
+                        style_defs.push_str(&box_text_style_definition(&name, &line.font, size));
+                        name
+                    })
+                    .clone();
+
+                let (w, h) = estimate_box_size(&line.text, size);
+                let radius = (size as f32 * 0.32).max(4.0);
+                let bg_path = rounded_rect_drawing(w, h, radius);
+
+                events.push_str(&format!(
+                    "Dialogue: 0,{start},{end},{style},,0,0,0,,{{\\an5\\pos({cx:.0},{cy:.0})\\p1}}{bg_path}{{\\p0}}\n",
+                    start = format_ass_time(line.start_ms),
+                    end = format_ass_time(line.end_ms),
+                    style = bg_style,
+                ));
+                events.push_str(&format!(
+                    "Dialogue: 1,{start},{end},{style},,0,0,0,,{{\\an5\\pos({cx:.0},{cy:.0})}}{text}\n",
+                    start = format_ass_time(line.start_ms),
+                    end = format_ass_time(line.end_ms),
+                    style = text_style,
+                    text = escape_ass_text(&line.text),
+                ));
+            }
+            SubtitleStyle::Classic | SubtitleStyle::WordHighlight => {
+                let key = format!("{:?}|{}|{size}", line.style, line.font);
+                let style_name = style_names
+                    .entry(key)
+                    .or_insert_with(|| {
+                        counter += 1;
+                        let name = format!("S{counter}_{}", sanitize_style_name(&line.font));
+                        style_defs.push_str(&style_definition(&name, &line.font, size, margin_lr, margin_v));
+                        name
+                    })
+                    .clone();
+
+                if line.style == SubtitleStyle::WordHighlight {
+                    events.push_str(&word_highlight_events(line, &style_name));
+                } else {
+                    events.push_str(&format!(
+                        "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
+                        start = format_ass_time(line.start_ms),
+                        end = format_ass_time(line.end_ms),
+                        style = style_name,
+                        text = escape_ass_text(&line.text),
+                    ));
+                }
+            }
         }
     }
 
@@ -455,6 +563,7 @@ mod tests {
             font: "Arial".into(),
             font_size: 28,
             style,
+            accent_color: DEFAULT_ACCENT_COLOR_HEX.to_string(),
             words: Vec::new(),
         }
     }
@@ -532,37 +641,79 @@ mod tests {
         let ass = build_ass(&lines, 1080, 1920);
 
         assert!(ass.contains("PlayResX: 1080"));
-        assert!(ass.contains("Style: S0_Arial,Arial,28"));
-        assert!(ass.contains("Style: S1_Impact,Impact,34"));
+        assert!(ass.contains("Style: S1_Arial,Arial,28"));
+        assert!(ass.contains("Style: S2_Impact,Impact,34"));
         // fett (Bold=-1) und mit sichtbarem Rand statt der alten Mini-Variante
         assert!(ass.contains(",-1,0,0,0,100,100,0,0,1,"));
         // dritte Zeile nutzt denselben Style wie die erste (kein doppelter Style-Eintrag)
         assert_eq!(ass.matches("Fontname").count(), 1);
-        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00,S0_Arial,,0,0,0,,Hallo"));
-        assert!(ass.contains("Dialogue: 0,0:00:02.00,0:00:03.00,S0_Arial,,0,0,0,,nochmal Arial"));
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00,S1_Arial,,0,0,0,,Hallo"));
+        assert!(ass.contains("Dialogue: 0,0:00:02.00,0:00:03.00,S1_Arial,,0,0,0,,nochmal Arial"));
     }
 
     #[test]
-    fn box_style_uses_border_style_three_with_accent_outline_colour() {
-        // libass füllt bei BorderStyle=3 die Box mit OutlineColour, nicht BackColour —
-        // das war ein realer Bug (schwarze Box, unsichtbarer Text), hier festgehalten.
+    fn parses_hex_rgb_with_fallback_for_invalid_input() {
+        assert_eq!(parse_hex_rgb("#FFD400"), (0xFF, 0xD4, 0x00));
+        assert_eq!(parse_hex_rgb("FF0000"), (0xFF, 0x00, 0x00));
+        // ungültige Eingabe -> Fallback-Gelb statt Panik/falscher Farbe
+        assert_eq!(parse_hex_rgb("nope"), (0xFF, 0xD4, 0x00));
+    }
+
+    #[test]
+    fn converts_hex_to_ass_colour_formats() {
+        // ASS-Reihenfolge ist BGR (bzw. AABBGGRR), nicht RGB — leicht zu verwechseln.
+        assert_eq!(hex_to_ass_inline("#FF0000"), "&H0000FF&");
+        assert_eq!(hex_to_ass_style_color("#FF0000"), "&H000000FF");
+    }
+
+    #[test]
+    fn rounded_rect_drawing_starts_and_ends_at_corner_radius() {
+        let path = rounded_rect_drawing(100.0, 40.0, 10.0);
+        assert!(path.starts_with("m 10 0"));
+        assert!(path.contains("l 90 0"));
+        assert!(path.contains("l 100 30"));
+    }
+
+    #[test]
+    fn box_style_draws_rounded_background_and_separate_text_layer() {
         let lines = vec![line("Achtung", 0, 1000, SubtitleStyle::Box)];
         let ass = build_ass(&lines, 1080, 1920);
-        assert!(ass.contains("&H0000D7FF,&H00000000,-1,0,0,0,100,100,0,0,3,4,0,2,"));
+
+        // zwei Events: Layer 0 = gezeichneter Hintergrund, Layer 1 = Text obendrüber
+        assert_eq!(ass.matches("Dialogue:").count(), 2);
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00"));
+        assert!(ass.contains("\\p1"));
+        assert!(ass.contains("\\p0"));
+        assert!(ass.contains("Dialogue: 1,0:00:00.00,0:00:01.00"));
+        assert!(ass.contains("\\pos("));
+        assert!(ass.ends_with("Achtung\n") || ass.contains("}Achtung\n"));
+        // Hintergrund-Style nutzt die Akzentfarbe als Füllfarbe (PrimaryColour)
+        assert!(ass.contains(&format!("Style: SB1,Arial,10,{}", hex_to_ass_style_color(DEFAULT_ACCENT_COLOR_HEX))));
     }
 
     #[test]
-    fn word_highlight_emits_one_event_per_word_with_accent_tag() {
+    fn word_highlight_emits_one_event_per_word_with_accent_tag_and_delay() {
         let mut l = line("Hallo Welt", 0, 1000, SubtitleStyle::WordHighlight);
         l.words = vec![word(0, 400, "Hallo"), word(400, 1000, "Welt")];
         let ass = build_ass(&[l], 1080, 1920);
+        let accent = hex_to_ass_inline(DEFAULT_ACCENT_COLOR_HEX);
 
         assert_eq!(ass.matches("Dialogue:").count(), 2);
-        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:00.40"));
-        assert!(ass.contains("Dialogue: 0,0:00:00.40,0:00:01.00"));
+        // Zeiten um WORD_HIGHLIGHT_DELAY_MS verschoben, damit's nicht "zu früh" wirkt
+        assert!(ass.contains("Dialogue: 0,0:00:00.09,0:00:00.49"));
+        assert!(ass.contains("Dialogue: 0,0:00:00.49,0:00:01.09"));
         // erstes Event hebt "Hallo" hervor, zweites "Welt"
-        assert!(ass.contains(&format!("{{\\c{ACCENT_COLOR_INLINE}}}Hallo{{\\c{WHITE_COLOR_INLINE}}} Welt")));
-        assert!(ass.contains(&format!("Hallo {{\\c{ACCENT_COLOR_INLINE}}}Welt{{\\c{WHITE_COLOR_INLINE}}}")));
+        assert!(ass.contains(&format!("{{\\c{accent}}}Hallo{{\\c{WHITE_COLOR_INLINE}}} Welt")));
+        assert!(ass.contains(&format!("Hallo {{\\c{accent}}}Welt{{\\c{WHITE_COLOR_INLINE}}}")));
+    }
+
+    #[test]
+    fn word_highlight_uses_custom_accent_color_per_line() {
+        let mut l = line("Hi", 0, 400, SubtitleStyle::WordHighlight);
+        l.accent_color = "#00FF00".to_string();
+        l.words = vec![word(0, 400, "Hi")];
+        let ass = build_ass(&[l], 1080, 1920);
+        assert!(ass.contains(&format!("{{\\c{}}}Hi{{\\c{WHITE_COLOR_INLINE}}}", hex_to_ass_inline("#00FF00"))));
     }
 
     #[test]
@@ -596,6 +747,7 @@ mod tests {
                 font: if i % 2 == 0 { "Arial".into() } else { "Impact".into() },
                 font_size: 28,
                 style: styles[i % styles.len()],
+                accent_color: DEFAULT_ACCENT_COLOR_HEX.to_string(),
                 words: s.words,
             })
             .collect();

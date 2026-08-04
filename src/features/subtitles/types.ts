@@ -29,6 +29,8 @@ export interface SubtitleLine extends TranscriptSegment {
   font: string;
   fontSize: number;
   style: SubtitleStyleId;
+  /** Hex-Farbe, genutzt für den Box-Hintergrund bzw. das hervorgehobene Wort. */
+  accentColor: string;
 }
 
 // Erste Auswahl gängiger, auf macOS/Windows vorinstallierter Fonts.
@@ -47,3 +49,6 @@ export const AVAILABLE_FONTS = [
 export const DEFAULT_FONT_SIZE = 64;
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyleId = "classic";
+
+// Kräftiges Gelb — genutzt für Box-Hintergrund und Wort-Highlight, im UI änderbar.
+export const DEFAULT_ACCENT_COLOR = "#FFD400";

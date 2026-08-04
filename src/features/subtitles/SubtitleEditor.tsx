@@ -4,6 +4,7 @@ import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AVAILABLE_FONTS,
+  DEFAULT_ACCENT_COLOR,
   DEFAULT_FONT_SIZE,
   DEFAULT_SUBTITLE_STYLE,
   SUBTITLE_STYLES,
@@ -31,6 +32,7 @@ export function SubtitleEditor() {
   const [lines, setLines] = useState<SubtitleLine[]>([]);
   const [defaultFont, setDefaultFont] = useState<string>(AVAILABLE_FONTS[0]);
   const [defaultStyle, setDefaultStyle] = useState<SubtitleStyleId>(DEFAULT_SUBTITLE_STYLE);
+  const [defaultAccentColor, setDefaultAccentColor] = useState<string>(DEFAULT_ACCENT_COLOR);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
@@ -62,6 +64,7 @@ export function SubtitleEditor() {
           font: defaultFont,
           fontSize: DEFAULT_FONT_SIZE,
           style: defaultStyle,
+          accentColor: defaultAccentColor,
         })),
       );
       setStatus(`${segments.length} Segmente transkribiert.`);
@@ -86,6 +89,11 @@ export function SubtitleEditor() {
   function applyStyleToAll(style: SubtitleStyleId) {
     setDefaultStyle(style);
     setLines((prev) => prev.map((l) => ({ ...l, style })));
+  }
+
+  function applyAccentColorToAll(color: string) {
+    setDefaultAccentColor(color);
+    setLines((prev) => prev.map((l) => ({ ...l, accentColor: color })));
   }
 
   async function renderVideo() {
@@ -159,6 +167,15 @@ export function SubtitleEditor() {
             ))}
           </select>
         </label>
+        <label className="color-field">
+          Farbe{" "}
+          <input
+            type="color"
+            value={defaultAccentColor}
+            onChange={(e) => applyAccentColorToAll(e.target.value)}
+            title="Farbe für Box-Hintergrund bzw. Wort-Highlight"
+          />
+        </label>
       </div>
 
       {status && <p className="status">{status}</p>}
@@ -198,6 +215,13 @@ export function SubtitleEditor() {
                       </option>
                     ))}
                   </select>
+                  <input
+                    type="color"
+                    className="segment__color"
+                    value={line.accentColor}
+                    onChange={(e) => updateLine(i, { accentColor: e.target.value })}
+                    title="Farbe für Box-Hintergrund bzw. Wort-Highlight"
+                  />
                 </div>
               </li>
             ))}
