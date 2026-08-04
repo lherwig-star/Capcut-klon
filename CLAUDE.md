@@ -14,18 +14,27 @@ src/shared/            # UI-Kit, Types, Utils — von mehreren Features genutzt
 src-tauri/             # Rust-Shell, FFmpeg/Whisper-Sidecar-Befehle
 ```
 
-- **Nicht in einem `features/<name>`-Ordner arbeiten, den gerade jemand anderes bearbeitet**, außer explizit angefragt. Vor Arbeitsbeginn in `docs/work-log.md` bzw. dem GitHub-Projects-Board nachsehen, wer woran sitzt.
-- Änderungen an `src/shared/` sind riskanter (betreffen beide) — klein halten, im PR-Titel klar als "shared:" kennzeichnen.
-- Neue Features bekommen einen eigenen Ordner unter `src/features/`, keine Querverweise zwischen Features außer über `src/shared/`.
+Aktuelle Zuständigkeit (Stand 2026-08-04):
+
+| Person | Branch | Feature-Ordner |
+|---|---|---|
+| Lukas | `feature/video-editing` | `features/timeline`, `features/preview-engine`, `features/export`, `features/media-library` |
+| Finn | `feature/subtitles` | `features/audio-editor`, `features/subtitles` |
+
+- **Nur in den eigenen Feature-Ordnern arbeiten.** Wer an `feature/video-editing` sitzt, fasst `features/audio-editor`/`features/subtitles` nicht an und umgekehrt — dadurch gibt es praktisch keine Datei-Überschneidung zwischen den beiden Branches.
+- Änderungen an `src/shared/` betreffen potenziell beide — klein halten und im Commit/PR klar als "shared:" kennzeichnen.
+- `features/project` (Speichern/Laden) ist noch niemandem zugeordnet — vor Arbeit daran kurz absprechen, wer das übernimmt.
+- Wenn sich die Zuständigkeit ändert oder ein drittes Themengebiet dazukommt: diese Tabelle aktualisieren.
 
 ## Git-Workflow
 
-- **Nie direkt auf `main` pushen.** Immer von `main` branchen: `feature/<bereich>-<kurzbeschreibung>`.
-- Vor Branch-Erstellung: `git pull origin main`.
-- Vor dem Push: auf aktuellen `main` rebasen.
-- Kleine, häufige PRs statt lange laufende Branches.
-- `main` ist geschützt: PR + grüne CI sind Pflicht.
-- Merge-Konflikte in `src/shared/` oder Config-Dateien nicht automatisch aufheben, wenn die Absicht unklar ist — beim Menschen nachfragen statt zu raten.
+- **Zwei lang laufende Branches statt PR-pro-Task:** `feature/video-editing` und `feature/subtitles`. Jeder arbeitet direkt auf seinem eigenen Branch und pusht frei, ohne auf ein Approval der anderen Person zu warten — die Ordner-Trennung oben verhindert Konflikte im Alltag.
+- Vor Arbeitsbeginn: `git pull origin feature/<dein-branch>`, damit man auf dem eigenen aktuellen Stand ist.
+- Gelegentlich `main` in den eigenen Branch mergen/rebasen, damit man nicht zu weit auseinanderdriftet (`git fetch origin && git merge origin/main`).
+- **Merge nach `main`:** PR auf, CI muss grün sein — **kein Review/Approval der anderen Person nötig**, selbst mergen sobald CI durchläuft. Der PR dient nur als Sichtbarkeit + CI-Gate, nicht als Freigabe-Prozess.
+- **Nie direkt auf `main` pushen** — auch wenn kein Approval nötig ist, läuft der Merge über einen PR, damit CI durchläuft und die History nachvollziehbar bleibt.
+- Merge-Konflikte in `src/shared/` oder Config-Dateien (z.B. `package.json`, `Cargo.toml`) nicht automatisch auflösen, wenn die Absicht unklar ist — beim Menschen nachfragen statt zu raten.
+- Sobald ein Feature-Bereich fertig ist und der jeweilige Branch aufgelöst wird, gilt wieder die kurzlebige Konvention `feature/<bereich>-<kurzbeschreibung>` für neue Einzel-Tasks.
 
 ## Vor Abschluss einer Aufgabe
 
