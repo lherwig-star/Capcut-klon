@@ -4,8 +4,12 @@ import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AVAILABLE_FONTS,
+  DEFAULT_ACCENT_COLOR,
   DEFAULT_FONT_SIZE,
+  DEFAULT_SUBTITLE_STYLE,
+  SUBTITLE_STYLES,
   SubtitleLine,
+  SubtitleStyleId,
   TranscriptSegment,
 } from "./types";
 import "./SubtitleEditor.css";
@@ -27,6 +31,8 @@ export function SubtitleEditor() {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [lines, setLines] = useState<SubtitleLine[]>([]);
   const [defaultFont, setDefaultFont] = useState<string>(AVAILABLE_FONTS[0]);
+  const [defaultStyle, setDefaultStyle] = useState<SubtitleStyleId>(DEFAULT_SUBTITLE_STYLE);
+  const [defaultAccentColor, setDefaultAccentColor] = useState<string>(DEFAULT_ACCENT_COLOR);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
@@ -53,7 +59,13 @@ export function SubtitleEditor() {
         language: "de",
       });
       setLines(
-        segments.map((s) => ({ ...s, font: defaultFont, fontSize: DEFAULT_FONT_SIZE })),
+        segments.map((s) => ({
+          ...s,
+          font: defaultFont,
+          fontSize: DEFAULT_FONT_SIZE,
+          style: defaultStyle,
+          accentColor: defaultAccentColor,
+        })),
       );
       setStatus(`${segments.length} Segmente transkribiert.`);
     } catch (e) {
@@ -72,6 +84,16 @@ export function SubtitleEditor() {
   function applyFontToAll(font: string) {
     setDefaultFont(font);
     setLines((prev) => prev.map((l) => ({ ...l, font })));
+  }
+
+  function applyStyleToAll(style: SubtitleStyleId) {
+    setDefaultStyle(style);
+    setLines((prev) => prev.map((l) => ({ ...l, style })));
+  }
+
+  function applyAccentColorToAll(color: string) {
+    setDefaultAccentColor(color);
+    setLines((prev) => prev.map((l) => ({ ...l, accentColor: color })));
   }
 
   async function renderVideo() {
@@ -131,6 +153,29 @@ export function SubtitleEditor() {
             ))}
           </select>
         </label>
+        <label>
+          Stil{" "}
+          <select
+            value={defaultStyle}
+            onChange={(e) => applyStyleToAll(e.target.value as SubtitleStyleId)}
+            title={SUBTITLE_STYLES.find((s) => s.id === defaultStyle)?.description}
+          >
+            {SUBTITLE_STYLES.map((s) => (
+              <option key={s.id} value={s.id} title={s.description}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="color-field">
+          Farbe{" "}
+          <input
+            type="color"
+            value={defaultAccentColor}
+            onChange={(e) => applyAccentColorToAll(e.target.value)}
+            title="Farbe für Box-Hintergrund bzw. Wort-Highlight"
+          />
+        </label>
       </div>
 
       {status && <p className="status">{status}</p>}
@@ -148,16 +193,36 @@ export function SubtitleEditor() {
                   onChange={(e) => updateLine(i, { text: e.target.value })}
                   rows={2}
                 />
-                <select
-                  value={line.font}
-                  onChange={(e) => updateLine(i, { font: e.target.value })}
-                >
-                  {AVAILABLE_FONTS.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
+                <div className="segment__selects">
+                  <select
+                    value={line.font}
+                    onChange={(e) => updateLine(i, { font: e.target.value })}
+                  >
+                    {AVAILABLE_FONTS.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={line.style}
+                    onChange={(e) => updateLine(i, { style: e.target.value as SubtitleStyleId })}
+                    title={SUBTITLE_STYLES.find((s) => s.id === line.style)?.description}
+                  >
+                    {SUBTITLE_STYLES.map((s) => (
+                      <option key={s.id} value={s.id} title={s.description}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="color"
+                    className="segment__color"
+                    value={line.accentColor}
+                    onChange={(e) => updateLine(i, { accentColor: e.target.value })}
+                    title="Farbe für Box-Hintergrund bzw. Wort-Highlight"
+                  />
+                </div>
               </li>
             ))}
           </ul>
