@@ -20,4 +20,6 @@ export const AVAILABLE_FONTS = [
   "Georgia",
 ] as const;
 
-export const DEFAULT_FONT_SIZE = 28;
+// Referenzgröße bei 1920px Videohöhe (Rust skaliert das proportional auf die
+// tatsächliche Videoauflösung) — 64 ergibt gut lesbare, TikTok-artige Untertitel.
+export const DEFAULT_FONT_SIZE = 64;

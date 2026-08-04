@@ -10,9 +10,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  height: 44px;
   flex-shrink: 0;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .timeline__toolbar-group {
@@ -22,21 +23,26 @@
 }
 
 .timeline__toolbar-group button {
-  font-size: 0.75rem;
-  padding: 0.3em 0.6em;
+  font-size: 12px;
+  padding: 0.3em 0.7em;
 }
 
 .timeline__timecode {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 0.8rem;
-  opacity: 0.8;
+  font-size: 12px;
+  color: var(--color-muted-foreground);
 }
 
 .timeline__zoom {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.8rem;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  padding: 2px 6px;
+  border-radius: var(--radius-md);
+  background: var(--color-sunken);
+  border: 1px solid var(--color-border);
 }
 
 .timeline__scroll {
@@ -65,9 +71,9 @@
   position: sticky;
   left: 0;
   z-index: 5;
-  background: var(--panel-bg, #202020);
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--color-panel);
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .timeline__ruler-wrap {
@@ -84,8 +90,20 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
-  background: #ff4d4f;
+  width: 1px;
+  background: var(--color-playhead);
   z-index: 6;
   pointer-events: none;
+}
+
+.timeline__playhead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -5px;
+  width: 11px;
+  height: 11px;
+  transform: rotate(45deg);
+  border-radius: 2px;
+  background: var(--color-playhead);
 }
