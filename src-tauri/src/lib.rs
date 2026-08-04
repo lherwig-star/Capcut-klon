@@ -43,8 +43,8 @@ fn render_subtitled_video(
 ) -> Result<String, String> {
     let video_path = PathBuf::from(video_path);
     let output_path = PathBuf::from(output_path);
-    subtitles::render_subtitled_video(&video_path, &lines, &output_path)?;
-    Ok(output_path.to_string_lossy().to_string())
+    let final_path = subtitles::render_subtitled_video(&video_path, &lines, &output_path)?;
+    Ok(final_path.to_string_lossy().to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
