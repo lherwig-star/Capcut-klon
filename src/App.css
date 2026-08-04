@@ -83,6 +83,28 @@ button:disabled {
   letter-spacing: 0.02em;
 }
 
+.app__nav {
+  display: flex;
+  gap: 0.4rem;
+  margin-right: auto;
+  margin-left: 1.5rem;
+}
+
+.app__nav button {
+  background: transparent;
+}
+
+.app__nav button.is-active {
+  background: #33353a;
+  border-color: #396cd8;
+}
+
+.app__subtitles {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
 .app__main {
   display: grid;
   grid-template-columns: 300px 1fr;

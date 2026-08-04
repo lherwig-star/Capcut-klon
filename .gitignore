@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Whisper models (grosse Binärdateien, lokal herunterladen s. docs/architecture.md)
+models/*.bin
