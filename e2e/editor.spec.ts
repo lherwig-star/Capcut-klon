@@ -101,6 +101,17 @@ test("keeps the export button and the zoom slider reachable", async ({ page }) =
   await expectInsideViewport(page, ".timeline__zoom");
 });
 
+test("shows a real thumbnail on the imported media card, not the generic icon", async ({ page }) => {
+  await page.getByRole("button", { name: /Importieren/ }).click();
+  const card = page.locator(".media-card");
+  await expect(card).toBeVisible();
+
+  // The icon fallback and a real thumbnail are mutually exclusive in MediaLibraryPanel.
+  const thumbSrc = await card.locator("img").getAttribute("src");
+  expect(thumbSrc, "media card fell back to the generic icon").toMatch(/^data:image\/jpeg/);
+  await expect(card.locator(".media-card__icon")).toHaveCount(0);
+});
+
 test("draws the clip rather than leaving the canvas blank", async ({ page }) => {
   await importClip(page);
   await page.waitForTimeout(1500);

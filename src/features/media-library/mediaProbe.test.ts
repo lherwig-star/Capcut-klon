@@ -117,11 +117,27 @@ describe("probeMediaFile", () => {
     await vi.advanceTimersByTimeAsync(0);
     created[0].emitMetadata(9);
 
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     const asset = await pending;
     expect(asset.durationSec).toBe(9);
+    // No 'seeked' ever fired, but a real file's first frame is on screen the moment
+    // metadata resolves - a stalled seek should not throw that away.
     expect(asset.thumbnailUrl).toBeUndefined();
+  });
+
+  it("falls back to whatever frame is decoded when the seek never completes", async () => {
+    // Quality-of-life fix: a slow first disk read through the asset protocol used to
+    // leave real imported clips with the generic icon instead of an actual frame.
+    const pending = probeMediaFile("/videos/clip.mp4");
+    await vi.advanceTimersByTimeAsync(0);
+    created[0].emitMetadata(9);
+    created[0].readyState = 2; // HAVE_CURRENT_DATA - a frame is already decoded
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const asset = await pending;
+    expect(asset.thumbnailUrl).toMatch(/^data:image\/jpeg/);
   });
 
   it("gives up rather than hanging when metadata never arrives", async () => {
@@ -166,7 +182,7 @@ describe("probeMediaFile", () => {
     const pending = probeMediaFile("/videos/stream.mkv");
     await vi.advanceTimersByTimeAsync(0);
     created[0].emitMetadata(Number.POSITIVE_INFINITY);
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     const asset = await pending;
     expect(asset.durationSec).toBe(0);
