@@ -25,3 +25,8 @@ dist-ssr
 
 # Whisper models (grosse Binärdateien, lokal herunterladen s. docs/architecture.md)
 models/*.bin
+
+# Playwright
+/test-results
+/playwright-report
+/blob-report
