@@ -5,16 +5,52 @@ import { PreviewPanel } from "./features/preview-engine/PreviewPanel";
 import { Timeline } from "./features/timeline/Timeline";
 import { useTimeline } from "./features/timeline/useTimeline";
 import { ExportPanel } from "./features/export/ExportPanel";
+import { exportTimeline } from "./features/export/exportTimeline";
+import { getTempExportPath } from "./features/export/runExport";
 import { SubtitleEditor } from "./features/subtitles/SubtitleEditor";
 import "./App.css";
 
 type View = "editor" | "subtitles";
+
+/** Good enough to transcribe and to preview while editing subtitles; a full-quality
+ *  export is still available separately via "Exportieren". Keeping the handoff render
+ *  small keeps the wait between the two tools short. */
+const HANDOFF_WIDTH = 1280;
+const HANDOFF_HEIGHT = 720;
+const HANDOFF_FPS = 30;
 
 function App() {
   const media = useMediaLibrary();
   const timelineApi = useTimeline();
   const [isExportOpen, setExportOpen] = useState(false);
   const [view, setView] = useState<View>("editor");
+  const [subtitleVideoPath, setSubtitleVideoPath] = useState<string | null>(null);
+  const [isHandoffBusy, setHandoffBusy] = useState(false);
+  const [handoffProgress, setHandoffProgress] = useState(0);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+
+  async function handleSendToSubtitles() {
+    setHandoffError(null);
+    setHandoffBusy(true);
+    setHandoffProgress(0);
+    try {
+      const outputPath = await getTempExportPath("mp4");
+      await exportTimeline(
+        timelineApi.timeline,
+        media.assets,
+        { outputPath, width: HANDOFF_WIDTH, height: HANDOFF_HEIGHT, fps: HANDOFF_FPS },
+        (payload) => {
+          setHandoffProgress(payload.totalSeconds > 0 ? Math.min(1, payload.secondsDone / payload.totalSeconds) : 0);
+        },
+      );
+      setSubtitleVideoPath(outputPath);
+      setView("subtitles");
+    } catch (err) {
+      setHandoffError(String(err));
+    } finally {
+      setHandoffBusy(false);
+    }
+  }
 
   return (
     <div className="app">
@@ -37,9 +73,19 @@ function App() {
           </button>
         </nav>
         {view === "editor" && (
-          <button type="button" onClick={() => setExportOpen(true)} disabled={timelineApi.durationSec <= 0}>
-            Exportieren
-          </button>
+          <div className="app__header-actions">
+            {handoffError && <span className="app__handoff-error">{handoffError}</span>}
+            <button
+              type="button"
+              onClick={handleSendToSubtitles}
+              disabled={isHandoffBusy || timelineApi.durationSec <= 0}
+            >
+              {isHandoffBusy ? `Wird übergeben… ${Math.round(handoffProgress * 100)}%` : "Für Untertitel verwenden"}
+            </button>
+            <button type="button" onClick={() => setExportOpen(true)} disabled={timelineApi.durationSec <= 0}>
+              Exportieren
+            </button>
+          </div>
         )}
       </header>
 
@@ -83,7 +129,7 @@ function App() {
         </>
       ) : (
         <div className="app__subtitles">
-          <SubtitleEditor />
+          <SubtitleEditor initialVideoPath={subtitleVideoPath} />
         </div>
       )}
     </div>
