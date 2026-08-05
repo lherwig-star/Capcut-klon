@@ -38,3 +38,4 @@ Gefunden und behoben:
 - **`npm run build` hätte die CI zerlegt**, sobald Testdateien existieren: tsc prüfte sie mit, ohne Node-Typen. Jetzt `tsconfig.test.json` getrennt.
 
 Widerlegt: die Vermutung, dass zwei Clips aus derselben Quelldatei den Export sprengen (doppelte `[n:v]`-Referenz). ffmpeg fügt selbst ein `split` ein — geteilte Clips exportieren sauber. Test hält das fest.
+2026-08-05 — Lukas — tooling — `install-windows.ps1` kann jetzt aktualisieren statt nur installieren (Vorbild wieder Colorgrading): liegt eine Git-Arbeitskopie vor, wird per fetch/pull im selben Ordner nachgezogen, sonst einmalig geklont. Damit entfällt das ZIP-Entpacken in immer neue Ordner — und weil `target/` und `node_modules` erhalten bleiben, dauert der Neubau Sekunden statt Minuten. Ungesicherte lokale Änderungen werden erkannt und das Update übersprungen, statt sie zu überschreiben. Git-Ablauf gegen ein echtes Repository durchgespielt (sauber → Update; geändert → unangetastet).

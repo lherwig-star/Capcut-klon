@@ -33,16 +33,34 @@ curl -L -o models/ggml-small.bin \
 
 ### Windows
 
-Ein Skript erledigt Voraussetzungen, Build und Desktop-Verknüpfung in einem:
+Ein Skript erledigt Voraussetzungen, Quellcode, Build und Desktop-Verknüpfung in einem.
+Für die Erstinstallation reicht die Datei allein — [herunterladen][install-ps1] und
+starten, sie klont dann selbst nach `%USERPROFILE%\Capcut-klon`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
 ```
 
-Es installiert fehlende Voraussetzungen (Node, Rust, ffmpeg, WebView2) über winget,
-baut die App und legt „CapCut-Klon" auf dem Desktop ab. Mehrfach ausführbar.
-Mit `-Bundle` entstehen zusätzlich MSI/NSIS-Installer, mit `-SkipDependencies`
-wird nur gebaut.
+Es installiert fehlende Voraussetzungen (Node, Rust, ffmpeg, WebView2, Git) über
+winget, baut die App und legt „CapCut-Klon" auf dem Desktop ab.
+
+**Aktualisieren:** dasselbe Skript im Projektordner erneut starten.
+
+```powershell
+cd $HOME\Capcut-klon
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
+```
+
+Es zieht den Stand per `git pull` im selben Ordner nach, statt daneben eine zweite
+Kopie anzulegen — dadurch bleiben die Build-Caches von Cargo und npm erhalten und der
+Neubau dauert Sekunden statt Minuten. Ungesicherte eigene Änderungen erkennt es und
+lässt sie samt Update in Ruhe, statt sie zu überschreiben.
+
+Weitere Schalter: `-Bundle` erzeugt zusätzlich MSI/NSIS-Installer, `-SkipUpdate` baut
+den vorhandenen Stand ohne zu aktualisieren, `-SkipDependencies` überspringt winget,
+`-Branch` wählt einen anderen Branch (Standard: `main`).
+
+[install-ps1]: https://raw.githubusercontent.com/lherwig-star/Capcut-klon/main/install-windows.ps1
 
 Zusätzlich nötig, weil winget das nicht mitbringt: die **MSVC-Build-Tools**
 ([Download](https://visualstudio.microsoft.com/visual-cpp-build-tools/), beim
