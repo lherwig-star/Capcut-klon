@@ -89,6 +89,22 @@ function App() {
         )}
       </header>
 
+      {/* Der Übergang rendert das ganze Video und dauert entsprechend. Ein Prozentwert im
+          Knopf oben rechts ist dafür zu unauffällig - ohne sichtbaren Fortschritt wirkt die
+          App schlicht hängengeblieben. */}
+      {isHandoffBusy && (
+        <div className="app__handoff-overlay">
+          <div className="app__handoff-card">
+            <h2>Video wird an die Untertitel übergeben</h2>
+            <p>Die Timeline wird gerendert. Das dauert je nach Länge des Videos etwas.</p>
+            <div className="app__handoff-track">
+              <div className="app__handoff-bar" style={{ width: `${Math.round(handoffProgress * 100)}%` }} />
+            </div>
+            <span className="app__handoff-percent">{Math.round(handoffProgress * 100)} %</span>
+          </div>
+        </div>
+      )}
+
       {view === "editor" ? (
         <>
           <div className="app__main">

@@ -66,8 +66,16 @@ Zusätzlich nötig, weil winget das nicht mitbringt: die **MSVC-Build-Tools**
 ([Download](https://visualstudio.microsoft.com/visual-cpp-build-tools/), beim
 Installer „Desktopentwicklung mit C++" anhaken). Rust braucht sie zum Linken.
 
-Für Untertitel-Transkription zusätzlich `whisper-cli` im PATH und das Modell
-unter `models/ggml-small.bin` (Download-URL siehe macOS-Abschnitt oben).
+**Untertitel-Transkription** braucht zweierlei, das winget nicht mitbringt:
+
+- Das Whisper-Modell unter `models/ggml-small.bin` (~490 MB). Das Skript lädt es
+  automatisch; mit `-SkipWhisperModel` überspringen.
+- Die `whisper-cli` im PATH. Fertige Windows-Binaries gibt es unter
+  [whisper.cpp/releases](https://github.com/ggml-org/whisper.cpp/releases) — entpacken
+  und den Ordner in den PATH aufnehmen.
+
+Ohne beides funktioniert alles außer „Transkribieren"; das Skript weist beim Lauf
+darauf hin, statt es erst beim Klick scheitern zu lassen.
 
 ## Entwicklung
 

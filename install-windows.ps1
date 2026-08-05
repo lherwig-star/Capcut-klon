@@ -35,6 +35,7 @@ param(
     [string] $Destination = (Join-Path $HOME "Capcut-klon"),
     [switch] $SkipDependencies,
     [switch] $SkipUpdate,
+    [switch] $SkipWhisperModel,
     [switch] $Bundle,
     [switch] $NoShortcut
 )
@@ -269,6 +270,51 @@ if ($mode -eq "clone") {
     Write-Warn "Kein Git-Ordner - dieser Stand lässt sich nicht automatisch aktualisieren."
     Write-Warn "Für künftige Updates das Skript einmal ohne Projektordner starten, dann"
     Write-Warn "wird nach $Destination geklont und ein erneuter Aufruf zieht per git nach."
+}
+
+# --------------------------------------------------------------------------
+# Untertitel-Voraussetzungen
+# --------------------------------------------------------------------------
+
+Write-Step "Untertitel-Voraussetzungen"
+
+# Die Transkription braucht zweierlei, das winget nicht mitbringt: das Whisper-Modell
+# (eine grosse Binaerdatei, absichtlich nicht im Repo) und die whisper-cli. Fehlt eines,
+# scheitert erst der Klick auf "Transkribieren" - deshalb hier vorab pruefen und, was
+# sich automatisch beschaffen laesst, gleich holen.
+$modelPath = Join-Path $projectDir "models\ggml-small.bin"
+if ($SkipWhisperModel) {
+    Write-Note "Modell-Download uebersprungen (-SkipWhisperModel)"
+} elseif (Test-Path $modelPath) {
+    Write-Ok "Whisper-Modell vorhanden"
+} else {
+    $modelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+    Write-Note "lade Whisper-Modell (~490 MB, einmalig) nach models\ggml-small.bin"
+    New-Item -ItemType Directory -Force -Path (Split-Path $modelPath) | Out-Null
+    # In eine .part-Datei laden und erst am Ende umbenennen: ein abgebrochener Download
+    # sonst als vollstaendiges Modell zurueckbleiben und beim naechsten Lauf uebersprungen
+    # werden - die Transkription scheitert dann mit einer viel unklareren Meldung.
+    $partial = "$modelPath.part"
+    try {
+        $previous = $ProgressPreference
+        $ProgressPreference = "SilentlyContinue"   # sonst extrem langsam
+        Invoke-WebRequest -Uri $modelUrl -OutFile $partial -UseBasicParsing
+        $ProgressPreference = $previous
+        Move-Item -Force $partial $modelPath
+        Write-Ok "Whisper-Modell geladen"
+    } catch {
+        Remove-Item -Force -ErrorAction SilentlyContinue $partial
+        Write-Warn "Modell-Download fehlgeschlagen: $($_.Exception.Message)"
+        Write-Warn "Die Transkription bleibt bis dahin nicht nutzbar; alles andere funktioniert."
+    }
+}
+
+if (Test-Command "whisper-cli") {
+    Write-Ok "whisper-cli gefunden"
+} else {
+    Write-Warn "whisper-cli wurde nicht gefunden - ohne sie schlaegt 'Transkribieren' fehl."
+    Write-Warn "Fertige Windows-Binaries: https://github.com/ggml-org/whisper.cpp/releases"
+    Write-Warn "Entpacken und den Ordner in den PATH aufnehmen (oder whisper-cli.exe dorthin legen)."
 }
 
 # --------------------------------------------------------------------------
