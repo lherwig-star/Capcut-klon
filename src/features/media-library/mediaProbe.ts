@@ -1,4 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { videoThumbnail } from "../export/runExport";
 import { createId } from "../../shared/id";
 import type { MediaAsset, MediaKind } from "../../shared/types";
 
@@ -147,7 +148,7 @@ function releaseMediaElement(el: HTMLMediaElement) {
   el.load();
 }
 
-async function probeVideo(url: string, name: string) {
+async function probeVideo(url: string, path: string, name: string) {
   const video = document.createElement("video");
   video.preload = "auto";
   video.muted = true;
@@ -160,16 +161,18 @@ async function probeVideo(url: string, name: string) {
       METADATA_TIMEOUT_MS,
       `${name}: Zeitüberschreitung beim Lesen der Metadaten.`,
     );
+    // ffmpeg first: in the packaged app the page and the asset protocol are different
+    // origins, so drawing the <video> onto a canvas taints it and toDataURL throws
+    // SecurityError - the browser route can therefore never produce a thumbnail there,
+    // however long it is given. It stays as the fallback for when ffmpeg is missing.
+    const viaFfmpeg = await videoThumbnail(path, meta.duration > 0 ? Math.min(0.5, meta.duration / 2) : 0);
+    if (viaFfmpeg) return { ...meta, thumbnailUrl: viaFfmpeg };
+
     const thumbnailUrl = await withTimeout(
       captureThumbnail(video),
       THUMBNAIL_TIMEOUT_MS,
       "thumbnail-timeout",
-    ).catch(() => {
-      // The seek to the target frame never finished - most likely a slow first disk read
-      // through the asset protocol, not a decode failure. Whatever the decoder already
-      // has on screen (typically the first frame) beats falling back to the generic icon.
-      return grabVideoFrame(video);
-    });
+    ).catch(() => grabVideoFrame(video));
     return { ...meta, thumbnailUrl };
   } finally {
     releaseMediaElement(video);
@@ -221,7 +224,7 @@ export async function probeMediaFile(path: string): Promise<MediaAsset> {
   const id = createId("asset");
 
   if (kind === "video") {
-    const { duration, width, height, thumbnailUrl } = await probeVideo(url, name);
+    const { duration, width, height, thumbnailUrl } = await probeVideo(url, path, name);
     return { id, kind, name, path, url, durationSec: duration, width, height, thumbnailUrl };
   }
 

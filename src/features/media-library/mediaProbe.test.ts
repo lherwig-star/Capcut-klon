@@ -4,6 +4,13 @@ vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `asset://localhost/${encodeURIComponent(path)}`,
 }));
 
+// The ffmpeg route is the real path in the packaged app; these tests cover the browser
+// fallback, so it reports "unavailable" unless a test says otherwise.
+const videoThumbnail = vi.fn<(path: string, at: number) => Promise<string | null>>();
+vi.mock("../export/runExport", () => ({
+  videoThumbnail: (path: string, at: number) => videoThumbnail(path, at),
+}));
+
 const { detectMediaKind, probeMediaFile } = await import("./mediaProbe");
 
 /**
@@ -53,6 +60,7 @@ let created: FakeVideo[] = [];
 
 beforeEach(() => {
   created = [];
+  videoThumbnail.mockReset().mockResolvedValue(null);
   vi.useFakeTimers();
 
   const realCreate = document.createElement.bind(document);
@@ -138,6 +146,34 @@ describe("probeMediaFile", () => {
 
     const asset = await pending;
     expect(asset.thumbnailUrl).toMatch(/^data:image\/jpeg/);
+  });
+
+  it("uses ffmpeg's thumbnail, which is the only route that works in the packaged app", async () => {
+    // In the packaged app the page is served from tauri.localhost and the file from
+    // asset.localhost. Drawing that <video> onto a canvas taints it, so toDataURL throws
+    // SecurityError and the browser route can never produce a thumbnail there, however
+    // long it is given - which is why every clip showed the generic icon.
+    videoThumbnail.mockResolvedValue("data:image/jpeg;base64,FFMPEG");
+    const pending = probeMediaFile("C:\\videos\\clip.mp4");
+    await vi.advanceTimersByTimeAsync(0);
+    created[0].emitMetadata(20);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const asset = await pending;
+    expect(asset.thumbnailUrl).toBe("data:image/jpeg;base64,FFMPEG");
+    // Seeks a little way in rather than to frame zero, which is often black.
+    expect(videoThumbnail).toHaveBeenCalledWith("C:\\videos\\clip.mp4", 0.5);
+  });
+
+  it("asks ffmpeg for frame zero when the duration is unknown", async () => {
+    videoThumbnail.mockResolvedValue("data:image/jpeg;base64,FFMPEG");
+    const pending = probeMediaFile("/videos/stream.mkv");
+    await vi.advanceTimersByTimeAsync(0);
+    created[0].emitMetadata(Number.POSITIVE_INFINITY);
+    await vi.advanceTimersByTimeAsync(0);
+
+    await pending;
+    expect(videoThumbnail).toHaveBeenCalledWith("/videos/stream.mkv", 0);
   });
 
   it("gives up rather than hanging when metadata never arrives", async () => {
