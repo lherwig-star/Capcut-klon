@@ -15,6 +15,12 @@ export interface MediaAsset {
   height?: number;
   /** Data URL preview image. */
   thumbnailUrl?: string;
+  /**
+   * Whether the file carries an audio stream, as reported by ffprobe. `undefined` means
+   * nobody has checked yet — the export probes on demand, because referencing the audio
+   * pad of a silent file aborts the whole filter graph.
+   */
+  hasAudio?: boolean;
 }
 
 export type TrackKind = "video" | "audio";

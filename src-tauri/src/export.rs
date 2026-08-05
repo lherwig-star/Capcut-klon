@@ -4,6 +4,25 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+/// Builds a command that starts no console window.
+///
+/// The app is built with `windows_subsystem = "windows"`, so it owns no console. Every
+/// console child it starts gets one of its own — a black window that sits in front of the
+/// app for the whole export. CREATE_NO_WINDOW suppresses that; on other platforms there is
+/// nothing to suppress.
+fn hidden_command(program: &str) -> Command {
+    // Only the Windows branch mutates it.
+    #[allow(unused_mut)]
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 #[derive(Clone, Serialize)]
 struct ExportProgress {
     #[serde(rename = "secondsDone")]
@@ -22,7 +41,7 @@ struct ExportFinished {
 /// progress back to the frontend via the "export://progress" / "export://finished" events.
 #[tauri::command]
 pub fn export_video(app: AppHandle, args: Vec<String>, total_seconds: f64) -> Result<(), String> {
-    let mut child = Command::new("ffmpeg")
+    let mut child = hidden_command("ffmpeg")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -70,7 +89,7 @@ pub fn export_video(app: AppHandle, args: Vec<String>, total_seconds: f64) -> Re
 
 #[tauri::command]
 pub fn check_ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
+    hidden_command("ffmpeg")
         .arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -78,6 +97,34 @@ pub fn check_ffmpeg_available() -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+/// Reports, per given path, whether the file carries at least one audio stream.
+///
+/// The export needs this before it builds its filter graph: pulling the audio pad off an
+/// input that has none is a fatal error for the whole render, not a skippable warning.
+/// A file ffprobe cannot read counts as having no audio - the video pass will surface the
+/// real problem with a better message than a broken audio chain would.
+#[tauri::command]
+pub fn probe_audio_streams(paths: Vec<String>) -> Vec<bool> {
+    paths
+        .iter()
+        .map(|path| {
+            hidden_command("ffprobe")
+                .args([
+                    "-v", "error",
+                    "-select_streams", "a",
+                    "-show_entries", "stream=index",
+                    "-of", "csv=p=0",
+                ])
+                .arg(path)
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .map(|out| out.status.success() && !out.stdout.is_empty())
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 /// Parses a line of ffmpeg's stderr progress output for `time=HH:MM:SS.ss`.

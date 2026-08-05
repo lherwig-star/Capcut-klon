@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import type { MediaAsset, TimelineState } from "../../shared/types";
 import { formatTimecode } from "../../shared/time";
 import { buildFfmpegArgs } from "./buildFfmpegArgs";
-import { checkFfmpegAvailable, runExport } from "./runExport";
+import { checkFfmpegAvailable, probeAudioStreams, runExport } from "./runExport";
 import "./ExportPanel.css";
 
 interface ExportPanelProps {
@@ -39,10 +39,14 @@ export function ExportPanel({ timeline, assets, durationSec, onClose }: ExportPa
     });
     if (!outputPath) return;
 
-    const plan = buildFfmpegArgs(timeline, assets, { outputPath, width, height, fps });
     setStatus("exporting");
     setProgress(0);
     try {
+      // Which sources actually have sound is only knowable via ffprobe, and the graph has
+      // to know before it is built - see buildFfmpegArgs.
+      const probed = await probeAudioStreams(assets.map((asset) => asset.path));
+      const assetsWithAudio = assets.map((asset, index) => ({ ...asset, hasAudio: probed[index] ?? false }));
+      const plan = buildFfmpegArgs(timeline, assetsWithAudio, { outputPath, width, height, fps });
       await runExport(plan.args, plan.totalSeconds, (payload) => {
         setProgress(payload.totalSeconds > 0 ? Math.min(1, payload.secondsDone / payload.totalSeconds) : 0);
       });

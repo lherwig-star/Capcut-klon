@@ -43,15 +43,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+// Spelled out rather than read off the global MediaError: this runs inside an error
+// handler, and a ReferenceError thrown there would leave the import promise pending
+// forever — the very hang this module exists to avoid. The values are fixed by spec.
+const MEDIA_ERR_ABORTED = 1;
+const MEDIA_ERR_NETWORK = 2;
+const MEDIA_ERR_DECODE = 3;
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+
 function mediaErrorMessage(el: HTMLMediaElement, name: string): string {
   switch (el.error?.code) {
-    case MediaError.MEDIA_ERR_ABORTED:
+    case MEDIA_ERR_ABORTED:
       return `${name}: Laden wurde abgebrochen.`;
-    case MediaError.MEDIA_ERR_NETWORK:
+    case MEDIA_ERR_NETWORK:
       return `${name}: Datei konnte nicht gelesen werden (Zugriff verweigert?).`;
-    case MediaError.MEDIA_ERR_DECODE:
+    case MEDIA_ERR_DECODE:
       return `${name}: Datei ist beschädigt oder unvollständig.`;
-    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+    case MEDIA_ERR_SRC_NOT_SUPPORTED:
       return `${name}: Codec/Container wird vom System-Player nicht unterstützt.`;
     default:
       return `${name}: Datei konnte nicht geladen werden.`;

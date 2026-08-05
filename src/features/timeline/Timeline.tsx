@@ -1,4 +1,4 @@
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { MediaAsset } from "../../shared/types";
 import { getAssetDurationBound, getDefaultClipDuration } from "../../shared/mediaUtils";
 import { formatTimecode } from "../../shared/time";
@@ -14,6 +14,12 @@ interface TimelineProps {
 
 const MIN_WIDTH_SEC = 30;
 const TRAIL_SEC = 15;
+/**
+ * Width of the sticky track-name column. The playhead is positioned against it in script
+ * while the columns themselves are laid out in CSS, so it is published as a custom
+ * property below rather than written down in both places — a silent drift between the two
+ * would put the playhead somewhere other than the time it points at.
+ */
 const HEADER_WIDTH_PX = 140;
 
 export function Timeline({ assets, timelineApi }: TimelineProps) {
@@ -103,7 +109,10 @@ export function Timeline({ assets, timelineApi }: TimelineProps) {
   const playheadLeft = HEADER_WIDTH_PX + timeline.playheadSec * timeline.zoomPxPerSec;
 
   return (
-    <section className="timeline">
+    <section
+      className="timeline"
+      style={{ "--timeline-header-width": `${HEADER_WIDTH_PX}px` } as CSSProperties}
+    >
       <header className="timeline__toolbar">
         <div className="timeline__toolbar-group">
           <button type="button" onClick={() => addTrack("video")}>
