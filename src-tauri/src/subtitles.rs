@@ -266,9 +266,13 @@ fn scale_to_video_height(reference_size: u32, play_res_y: u32) -> u32 {
 const DEFAULT_ACCENT_COLOR_HEX: &str = "#FFD400";
 /// Weiß als ASS-Inline-Override-Farbe, zum Zurücksetzen nach dem hervorgehobenen Wort.
 const WHITE_COLOR_INLINE: &str = "&HFFFFFF&";
-/// Das Wort-Highlight etwas später als whisper's Zeitstempel starten/enden lassen —
-/// gefühlt kam die Hervorhebung sonst, bevor das Wort tatsächlich zu hören war.
-const WORD_HIGHLIGHT_DELAY_MS: i64 = 90;
+/// Leichter Vorlauf, damit die Hervorhebung nicht fühlbar vor dem gesprochenen Wort
+/// kommt. Kleiner als der erste Versuch (90ms) — reine Heuristik, whisper's Wort-
+/// Zeitstempel sind nicht frame-genau.
+const WORD_HIGHLIGHT_LEAD_MS: i64 = 60;
+/// Mindestdauer pro Hervorhebung. Kurze Füllwörter ("es", "ist") sind sonst nur
+/// 100-150ms sichtbar und wirken wie ein Sprung statt eines Mitlesens.
+const MIN_WORD_HIGHLIGHT_MS: i64 = 180;
 
 fn parse_hex_rgb(hex: &str) -> (u8, u8, u8) {
     let h = hex.trim_start_matches('#');
@@ -293,11 +297,14 @@ fn hex_to_ass_style_color(hex: &str) -> String {
     format!("&H00{b:02X}{g:02X}{r:02X}")
 }
 
-fn style_definition(name: &str, font: &str, size: u32, margin_lr: u32, margin_v: u32) -> String {
-    // Gilt für Classic und WordHighlight: fette weiße Schrift mit dickem Rand.
+/// Gilt für Classic (Textfarbe = `primary_color_hex`) und die Grundfarbe von WordHighlight
+/// (dort immer Weiß, das hervorgehobene Wort wird per Inline-Tag umgefärbt). Fett mit
+/// dickem schwarzem Rand für Kontrast unabhängig von der gewählten Textfarbe.
+fn style_definition(name: &str, font: &str, size: u32, primary_color_hex: &str, margin_lr: u32, margin_v: u32) -> String {
     let outline = (size as f32 * 0.09).round().max(2.0) as u32;
+    let primary = hex_to_ass_style_color(primary_color_hex);
     format!(
-        "Style: {name},{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n"
+        "Style: {name},{font},{size},{primary},&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n"
     )
 }
 
@@ -308,24 +315,35 @@ fn box_bg_style_definition(name: &str, accent_color_hex: &str) -> String {
     format!("Style: {name},Arial,10,{fill},&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n")
 }
 
-/// Text-Style fürs Box-Layer: schwarze, fette Schrift ohne eigenen Rand (liegt auf der
-/// bereits kontrastreichen Fläche).
+/// Text-Style fürs Box-Layer: schwarze, sehr fette Schrift. `size` ist hier bereits die
+/// hochskalierte Box-Schriftgröße (siehe `layout_box_text`), nicht die Basisgröße der Zeile.
 fn box_text_style_definition(name: &str, font: &str, size: u32) -> String {
     format!("Style: {name},{font},{size},&H00000000,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n")
 }
 
-/// Schätzt die gerenderte Breite/Höhe einer Zeile grob anhand der Zeichenanzahl, um das
-/// Hintergrund-Rechteck der Box passend zu dimensionieren. Keine echte Textmetrik (die hat
-/// nur libass zur Renderzeit) — Faktoren wurden gegen echtes Rendern kalibriert.
-fn estimate_box_size(text: &str, size: u32) -> (f32, f32) {
+/// Berechnet Anzeige-Text (ggf. mit Skalierungs-Tag) sowie Breite/Höhe des Box-Hintergrunds.
+/// Ohne echte Textmetrik (die hat nur libass zur Renderzeit) wird die Breite grob aus der
+/// Zeichenanzahl geschätzt. Wichtig: die Box darf nie über `max_width` hinausgehen — lange
+/// Wörter/Zeilen werden per `\fscx\fscy` proportional verkleinert statt über den Rand zu
+/// laufen (Bug aus dem letzten Test: Box hatte keine feste Begrenzung).
+fn layout_box_text(text: &str, size: u32, play_res_x: u32) -> (String, f32, f32) {
+    let max_width = play_res_x as f32 * 0.86;
+    let size_f = size as f32;
+    let avg_char_width = size_f * 0.60;
+    let padding_x = size_f * 0.55;
+    let padding_y = size_f * 0.3;
+    let height = size_f * 1.25 + padding_y * 2.0;
+
     let char_count = text.chars().count().max(1) as f32;
-    let size = size as f32;
-    let avg_char_width = size * 0.58;
-    let padding_x = size * 0.5;
-    let padding_y = size * 0.28;
-    let width = char_count * avg_char_width + padding_x * 2.0;
-    let height = size * 1.2 + padding_y * 2.0;
-    (width, height)
+    let natural_width = char_count * avg_char_width + padding_x * 2.0;
+    let escaped = escape_ass_text(text);
+
+    if natural_width <= max_width {
+        (escaped, natural_width, height)
+    } else {
+        let scale = ((max_width / natural_width) * 100.0).round().clamp(45.0, 100.0);
+        (format!("{{\\fscx{scale:.0}\\fscy{scale:.0}}}{escaped}"), max_width, height)
+    }
 }
 
 /// Zeichnet ein abgerundetes Rechteck (Breite `w`, Höhe `h`, Eckradius `r`) als ASS-`\p`-
@@ -372,10 +390,23 @@ fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
             .collect::<Vec<_>>()
             .join(" ");
 
+        let start = active.start_ms + WORD_HIGHLIGHT_LEAD_MS;
+        let mut end = active.end_ms + WORD_HIGHLIGHT_LEAD_MS;
+        if end - start < MIN_WORD_HIGHLIGHT_MS {
+            // Kurzes Wort: Anzeigedauer verlängern, aber nie ins nächste Wort hinein
+            // bzw. bei der letzten Zeile nicht über das Zeilenende hinaus.
+            let cap = line
+                .words
+                .get(i + 1)
+                .map(|next| next.start_ms + WORD_HIGHLIGHT_LEAD_MS)
+                .unwrap_or(line.end_ms + WORD_HIGHLIGHT_LEAD_MS);
+            end = (start + MIN_WORD_HIGHLIGHT_MS).min(cap).max(end);
+        }
+
         events.push_str(&format!(
-            "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
-            start = format_ass_time(active.start_ms + WORD_HIGHLIGHT_DELAY_MS),
-            end = format_ass_time(active.end_ms + WORD_HIGHLIGHT_DELAY_MS),
+            "Dialogue: 0,{start_ts},{end_ts},{style},,0,0,0,,{text}\n",
+            start_ts = format_ass_time(start),
+            end_ts = format_ass_time(end),
             style = style_name,
         ));
     }
@@ -401,6 +432,10 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
 
         match line.style {
             SubtitleStyle::Box => {
+                // Box-Text bewusst größer als die Basisgröße für einen fetteren,
+                // präsenteren Eindruck (Nutzer-Feedback: "nicht dick/groß genug").
+                let box_font_size = ((size as f32) * 1.2).round() as u32;
+
                 let bg_key = format!("boxbg|{}", line.accent_color);
                 let bg_style = style_names
                     .entry(bg_key)
@@ -412,19 +447,19 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
                     })
                     .clone();
 
-                let text_key = format!("boxtext|{}|{size}", line.font);
+                let text_key = format!("boxtext|{}|{box_font_size}", line.font);
                 let text_style = style_names
                     .entry(text_key)
                     .or_insert_with(|| {
                         counter += 1;
                         let name = format!("ST{counter}");
-                        style_defs.push_str(&box_text_style_definition(&name, &line.font, size));
+                        style_defs.push_str(&box_text_style_definition(&name, &line.font, box_font_size));
                         name
                     })
                     .clone();
 
-                let (w, h) = estimate_box_size(&line.text, size);
-                let radius = (size as f32 * 0.32).max(4.0);
+                let (display_text, w, h) = layout_box_text(&line.text, box_font_size, play_res_x);
+                let radius = (box_font_size as f32 * 0.32).max(4.0);
                 let bg_path = rounded_rect_drawing(w, h, radius);
 
                 events.push_str(&format!(
@@ -434,21 +469,27 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
                     style = bg_style,
                 ));
                 events.push_str(&format!(
-                    "Dialogue: 1,{start},{end},{style},,0,0,0,,{{\\an5\\pos({cx:.0},{cy:.0})}}{text}\n",
+                    "Dialogue: 1,{start},{end},{style},,0,0,0,,{{\\an5\\pos({cx:.0},{cy:.0})}}{display_text}\n",
                     start = format_ass_time(line.start_ms),
                     end = format_ass_time(line.end_ms),
                     style = text_style,
-                    text = escape_ass_text(&line.text),
                 ));
             }
             SubtitleStyle::Classic | SubtitleStyle::WordHighlight => {
-                let key = format!("{:?}|{}|{size}", line.style, line.font);
+                // Classic nutzt die gewählte Akzentfarbe als Textfarbe; WordHighlight
+                // bleibt weiß als Grundfarbe (das aktive Wort wird per Inline-Tag umgefärbt).
+                let primary_color = if line.style == SubtitleStyle::Classic {
+                    line.accent_color.as_str()
+                } else {
+                    "#FFFFFF"
+                };
+                let key = format!("{:?}|{}|{size}|{primary_color}", line.style, line.font);
                 let style_name = style_names
                     .entry(key)
                     .or_insert_with(|| {
                         counter += 1;
                         let name = format!("S{counter}_{}", sanitize_style_name(&line.font));
-                        style_defs.push_str(&style_definition(&name, &line.font, size, margin_lr, margin_v));
+                        style_defs.push_str(&style_definition(&name, &line.font, size, primary_color, margin_lr, margin_v));
                         name
                     })
                     .clone();
@@ -699,12 +740,57 @@ mod tests {
         let accent = hex_to_ass_inline(DEFAULT_ACCENT_COLOR_HEX);
 
         assert_eq!(ass.matches("Dialogue:").count(), 2);
-        // Zeiten um WORD_HIGHLIGHT_DELAY_MS verschoben, damit's nicht "zu früh" wirkt
-        assert!(ass.contains("Dialogue: 0,0:00:00.09,0:00:00.49"));
-        assert!(ass.contains("Dialogue: 0,0:00:00.49,0:00:01.09"));
+        // Zeiten um WORD_HIGHLIGHT_LEAD_MS verschoben (beide Wörter sind lang genug,
+        // MIN_WORD_HIGHLIGHT_MS greift hier nicht)
+        assert!(ass.contains("Dialogue: 0,0:00:00.06,0:00:00.46"));
+        assert!(ass.contains("Dialogue: 0,0:00:00.46,0:00:01.06"));
         // erstes Event hebt "Hallo" hervor, zweites "Welt"
         assert!(ass.contains(&format!("{{\\c{accent}}}Hallo{{\\c{WHITE_COLOR_INLINE}}} Welt")));
         assert!(ass.contains(&format!("Hallo {{\\c{accent}}}Welt{{\\c{WHITE_COLOR_INLINE}}}")));
+    }
+
+    #[test]
+    fn word_highlight_extends_short_words_to_minimum_duration() {
+        // "es" ist nur 60ms lang -> würde ohne Mindestdauer kaum sichtbar aufblitzen.
+        let mut l = line("ist es gut", 0, 1000, SubtitleStyle::WordHighlight);
+        l.words = vec![
+            word(0, 300, "ist"),
+            word(300, 360, "es"),
+            word(360, 700, "gut"),
+        ];
+        let ass = build_ass(&[l], 1080, 1920);
+
+        // "es": Start 300+60=360, natürliches Ende 360+60=420 (Dauer nur 60ms) ->
+        // auf MIN_WORD_HIGHLIGHT_MS (180ms) verlängert, aber gedeckelt durch den
+        // (verschobenen) Start von "gut" bei 360+60=420.
+        assert!(ass.contains("Dialogue: 0,0:00:00.36,0:00:00.42"));
+    }
+
+    #[test]
+    fn word_highlight_last_word_extends_up_to_line_end() {
+        let mut l = line("hi", 0, 500, SubtitleStyle::WordHighlight);
+        l.words = vec![word(0, 60, "hi")];
+        let ass = build_ass(&[l], 1080, 1920);
+        // Start 0+60=60, natürlich Ende 60+60=120 (nur 60ms) -> auf 180ms verlängert,
+        // gedeckelt durch Zeilenende 500+60=560 (kein Konflikt, also volle 180ms).
+        assert!(ass.contains("Dialogue: 0,0:00:00.06,0:00:00.24"));
+    }
+
+    #[test]
+    fn layout_box_text_fits_within_max_width_for_short_text() {
+        let (text, w, _h) = layout_box_text("Kurz", 60, 1080);
+        assert_eq!(text, "Kurz");
+        assert!(w < 1080.0 * 0.86);
+    }
+
+    #[test]
+    fn layout_box_text_scales_down_long_words_to_stay_within_bounds() {
+        // Ein einzelnes sehr langes Wort darf die Box nie über den Rand hinaus wachsen
+        // lassen (gemeldeter Bug: Box hatte keine feste Begrenzung).
+        let (text, w, _h) = layout_box_text("Donaudampfschifffahrtsgesellschaftskapitaen", 80, 1080);
+        assert!(w <= 1080.0 * 0.86 + 0.5);
+        assert!(text.contains("\\fscx"));
+        assert!(text.contains("\\fscy"));
     }
 
     #[test]

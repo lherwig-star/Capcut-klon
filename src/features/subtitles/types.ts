@@ -29,7 +29,7 @@ export interface SubtitleLine extends TranscriptSegment {
   font: string;
   fontSize: number;
   style: SubtitleStyleId;
-  /** Hex-Farbe, genutzt für den Box-Hintergrund bzw. das hervorgehobene Wort. */
+  /** Hex-Farbe: Textfarbe bei Klassisch, Box-Hintergrund bzw. hervorgehobenes Wort sonst. */
   accentColor: string;
 }
 
@@ -52,3 +52,30 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyleId = "classic";
 
 // Kräftiges Gelb — genutzt für Box-Hintergrund und Wort-Highlight, im UI änderbar.
 export const DEFAULT_ACCENT_COLOR = "#FFD400";
+
+// Feste Auswahl statt freiem Farbwähler: native OS-Farbpaletten (macOS Color Panel etc.)
+// wenden teils Farbprofil-Konvertierungen an, sodass die gewählte Farbe nicht exakt der
+// gerenderten entspricht. Mit festen Hex-Werten ist die Farbe im Video immer exakt die
+// hier angezeigte.
+export const ACCENT_COLOR_PALETTE = [
+  "#FFFFFF",
+  "#000000",
+  "#8E8E93",
+  "#FFD400",
+  "#FFCC00",
+  "#FF9500",
+  "#FF3B30",
+  "#FF2D55",
+  "#FF6B6B",
+  "#AF52DE",
+  "#5E5CE6",
+  "#007AFF",
+  "#0A84FF",
+  "#30D5C8",
+  "#00C7BE",
+  "#34C759",
+  "#4CD964",
+  "#C7C7CC",
+  "#FFEB3B",
+  "#D4AF37",
+] as const;

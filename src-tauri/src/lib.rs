@@ -9,7 +9,9 @@ fn default_whisper_model_path() -> String {
     subtitles::default_model_path().to_string_lossy().to_string()
 }
 
-#[tauri::command]
+// (async): laeuft sonst auf dem Haupt-Thread und friert die Oberflaeche fuer die
+// gesamte Whisper-Laufzeit ein - bei einem laengeren Video sind das Minuten.
+#[tauri::command(async)]
 fn transcribe_video(
     video_path: String,
     model_path: Option<String>,
@@ -30,7 +32,8 @@ fn transcribe_video(
     subtitles::transcribe_video(&video_path, &model_path, &language)
 }
 
-#[tauri::command]
+// (async): dito, blockiert sonst bis ffmpeg die Untertitel eingebrannt hat.
+#[tauri::command(async)]
 fn render_subtitled_video(
     video_path: String,
     lines: Vec<SubtitleLine>,
@@ -52,6 +55,7 @@ pub fn run() {
             export::check_ffmpeg_available,
             export::probe_audio_streams,
             export::temp_export_path,
+            export::video_thumbnail,
             default_whisper_model_path,
             transcribe_video,
             render_subtitled_video,

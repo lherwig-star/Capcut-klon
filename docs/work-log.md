@@ -61,3 +61,13 @@ Getestet: Rust-Unit-Tests für `temp_export_path` (liegt im Temp-Verzeichnis, ei
 Beide mit Regressionstests in `usePreviewEngine.test.tsx` abgesichert, jeweils per Gegenprobe verifiziert (Fix entfernt → Test schlägt exakt wie erwartet fehl).
 
 **Bekannte, nicht behobene Einschränkung:** Wird dieselbe Asset-Datei auf zwei Video-Spuren mit überlappender Zeit platziert, teilen sich beide Vorkommen dasselbe `<video>`-Element (Pool ist nach `asset.id` geschlüsselt, nicht nach `clip.id`) — nur eines der beiden zeigt dann den korrekten Frame. Seltener Anwendungsfall; ein echter Fix bräuchte separate Elemente pro Clip statt pro Asset, das habe ich hier nicht angefasst.
+
+2026-08-05 — Lukas — export/media-library — Zwei gemeldete Fehler, beide durch Reproduktion statt Vermutung gefunden:
+
+**1. App fror beim Untertitel-Handoff komplett ein.** Tauri v2 fuehrt synchrone `#[tauri::command]`-Funktionen auf dem **Haupt-Thread** aus. `export_video` blockiert bis ffmpeg fertig ist — also fror die gesamte Oberflaeche fuer die Dauer des Renderns ein. Betraf latent auch den regulaeren Export (nie getestet) sowie `transcribe_video`/`render_subtitled_video` (Whisper laeuft minutenlang). Alle blockierenden Befehle auf `#[tauri::command(async)]` umgestellt.
+
+**2. Miniaturen zeigten immer das generische Icon.** Nicht der Timeout war die Ursache. Im gepackten Programm laeuft die Seite auf `tauri.localhost`, die Datei kommt ueber `asset.localhost` — fremde Herkunft. Das Zeichnen des `<video>` auf ein Canvas *taintet* es, und `toDataURL` wirft `SecurityError`; mein `catch` verschluckte das stillschweigend. Der Browser-Weg konnte dort also **nie** funktionieren, unabhaengig von jedem Timeout. In Chromium mit Same-Origin-Fixture war der e2e-Test blind dafuer. Reproduziert mit einem Cross-Origin-Versuch (`THROWS SecurityError`), dann geloest: neuer Rust-Befehl `video_thumbnail` erzeugt die Miniatur per ffmpeg — umgeht Tainting komplett und liefert auch fuer Codecs ein Bild, die WebView2 gar nicht dekodieren kann. Browser-Weg bleibt als Rueckfall ohne ffmpeg.
+
+Base64-Encoder handgeschrieben (statt Crate fuer einen Aufrufort) und gegen die RFC-4648-Vektoren sowie den gesamten Bytebereich getestet — bei Binaerdaten wie JPEG waere ein Fehler in den hohen Bytes sonst unentdeckt geblieben.
+
+**Beruehrt `src-tauri/src/lib.rs` (Finns Befehle):** nur das Attribut `(async)` ergaenzt, keine Logikaenderung.
