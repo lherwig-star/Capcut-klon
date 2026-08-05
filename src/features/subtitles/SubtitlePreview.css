@@ -15,12 +15,23 @@
   max-height: 46vh;
   width: auto;
   height: auto;
+  /* Kein eigener Stacking-Kontext auf dem Video, damit es garantiert unter der
+     Overlay-Ebene bleibt statt (macOS/WebKit) über sie zu geraten. */
+  position: relative;
+  z-index: 0;
+  pointer-events: none;
 }
 
 .subtitle-preview__overlay {
   position: absolute;
   left: 50%;
-  transform: translate(-50%, -50%);
+  /* translate3d statt translate: hardwarebeschleunigte <video>-Elemente laufen unter
+     WebKit (Tauri auf macOS) in einer eigenen OS-Kompositions-Ebene (CALayer), die
+     positionierte Geschwister ohne eigenen 3D-Layer trotz höherem z-index verdecken
+     kann. translate3d + will-change zwingen das Overlay auf seine eigene GPU-Ebene. */
+  transform: translate3d(-50%, -50%, 0);
+  will-change: transform;
+  z-index: 10;
   max-width: 88%;
   text-align: center;
   cursor: grab;
@@ -63,4 +74,6 @@
   font-size: 10px;
   color: rgba(255, 255, 255, 0.75);
   pointer-events: none;
+  transform: translateZ(0);
+  z-index: 10;
 }
