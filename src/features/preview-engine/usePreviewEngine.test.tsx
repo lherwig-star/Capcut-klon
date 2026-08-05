@@ -32,17 +32,31 @@ const VIDEO: MediaAsset = {
   height: 240,
 };
 
+/** Some streamed/live-recorded containers never report a usable duration. */
+const UNKNOWN_DURATION_VIDEO: MediaAsset = {
+  id: "v2",
+  kind: "video",
+  name: "live-recording.webm",
+  path: "/tmp/live-recording.webm",
+  url: "asset:///tmp/live-recording.webm",
+  durationSec: 0,
+  width: 320,
+  height: 240,
+};
+
 interface HarnessHandle {
   playheadSec: number;
   isPlaying: boolean;
   durationSec: number;
   togglePlay: () => void;
   seek: (sec: number) => void;
-  addClip: (start: number, duration: number) => void;
+  addClip: (start: number, duration: number, assetId?: string) => void;
   trackId: string;
 }
 
 let handle: HarnessHandle;
+/** Every <video> the hook has created, in creation order - the pool itself is private. */
+let createdVideos: HTMLVideoElement[];
 
 function Harness({ assets }: { assets: MediaAsset[] }) {
   const api = useTimeline();
@@ -59,7 +73,8 @@ function Harness({ assets }: { assets: MediaAsset[] }) {
       durationSec: api.durationSec,
       togglePlay: preview.togglePlay,
       seek: preview.seek,
-      addClip: (start, duration) => api.addClip(trackId, VIDEO.id, start, duration, 0, duration),
+      addClip: (start, duration, assetId = VIDEO.id) =>
+        api.addClip(trackId, assetId, start, duration, 0, duration),
       trackId,
     };
   });
@@ -71,6 +86,7 @@ function Harness({ assets }: { assets: MediaAsset[] }) {
 beforeEach(() => {
   now = 0;
   frameCallbacks = [];
+  createdVideos = [];
 
   vi.spyOn(performance, "now").mockImplementation(() => now);
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
@@ -78,13 +94,57 @@ beforeEach(() => {
     return frameCallbacks.length;
   });
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
+
+  // The video pool is private to the hook; recording every element as it's created is
+  // the only way to inspect one directly (its currentTime, in particular).
+  const realCreateElement = document.createElement.bind(document);
+  vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+    const el = realCreateElement(tag);
+    if (tag === "video") createdVideos.push(el as HTMLVideoElement);
+    return el;
+  });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Deliberately not vi.restoreAllMocks(): that would also undo src/test/setup.ts's
+  // canvas getContext spy, which is installed once per test file rather than per test -
+  // every test after the first would then hit jsdom's real (throwing) getContext. Each
+  // beforeEach below re-spies performance.now and document.createElement fresh anyway.
 });
 
 describe("usePreviewEngine playback", () => {
+  it("keeps advancing a clip whose asset has no known duration, instead of freezing it on frame zero", () => {
+    // The regression: asset.durationSec is 0 whenever the real length could not be
+    // determined (some streamed/live-recorded containers report Infinity, normalised to
+    // 0 in mediaProbe.ts). The seek target used to be clamped against
+    // Math.max(0, durationSec - 0.05), which for durationSec = 0 pins every target to
+    // zero - freezing that clip on its first frame for its entire run while the playhead
+    // kept advancing underneath, in both playback and scrubbing.
+    render(<Harness assets={[VIDEO, UNKNOWN_DURATION_VIDEO]} />);
+    act(() => handle.addClip(0, 20, UNKNOWN_DURATION_VIDEO.id));
+    act(() => handle.togglePlay());
+    act(() => advanceFrames(90, 16)); // ~1.44s of simulated playback
+
+    const el = createdVideos.find((v) => v.src.includes("live-recording"));
+    expect(el, "no <video> element was created for the clip").toBeDefined();
+    expect(el!.currentTime).toBeGreaterThan(0.5);
+  });
+
+  it("starts loading every clip on the timeline right away, not just the one under the playhead", () => {
+    // A <video> element used to come into existence only once drawFrame reached its
+    // clip - meaning a clip further down the timeline started loading from zero at the
+    // exact moment playback needed a decoded frame from it, instead of during whatever
+    // time the user spent editing before pressing play.
+    render(<Harness assets={[VIDEO, UNKNOWN_DURATION_VIDEO]} />);
+    act(() => handle.addClip(0, 5));
+    act(() => handle.addClip(10, 5, UNKNOWN_DURATION_VIDEO.id));
+    // Never played, never seeked anywhere near 10s.
+
+    const el = createdVideos.find((v) => v.src.includes("live-recording"));
+    expect(el, "the upcoming clip's video was not preloaded").toBeDefined();
+  });
+
   it("advances the playhead across many frames", () => {
     render(<Harness assets={[VIDEO]} />);
     act(() => handle.addClip(0, 10));
