@@ -34,6 +34,12 @@ fn default_accent_color() -> String {
     DEFAULT_ACCENT_COLOR_HEX.to_string()
 }
 
+/// Vertikale Standardposition, wenn das Frontend keine eigene mitschickt — deckt sich mit
+/// dem alten festen Wert (Untertitel bei 28% Abstand vom unteren Rand).
+fn default_position_y() -> f32 {
+    0.72
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleLine {
@@ -47,6 +53,11 @@ pub struct SubtitleLine {
     /// Wort beim Wort-Highlight-Stil. Bei `Classic` ungenutzt.
     #[serde(default = "default_accent_color")]
     pub accent_color: String,
+    /// Vertikale Position als Bruchteil der Bildhöhe von oben (0 = oberer Rand,
+    /// 1 = unterer Rand). Kommt aus der Drag-Vorschau im Frontend, damit Untertitel
+    /// z.B. nicht über dem Mund sitzen.
+    #[serde(default = "default_position_y")]
+    pub position_y: f32,
     #[serde(default)]
     pub words: Vec<WordTiming>,
 }
@@ -299,12 +310,15 @@ fn hex_to_ass_style_color(hex: &str) -> String {
 
 /// Gilt für Classic (Textfarbe = `primary_color_hex`) und die Grundfarbe von WordHighlight
 /// (dort immer Weiß, das hervorgehobene Wort wird per Inline-Tag umgefärbt). Fett mit
-/// dickem schwarzem Rand für Kontrast unabhängig von der gewählten Textfarbe.
-fn style_definition(name: &str, font: &str, size: u32, primary_color_hex: &str, margin_lr: u32, margin_v: u32) -> String {
+/// dickem schwarzem Rand für Kontrast unabhängig von der gewählten Textfarbe. Positionierung
+/// läuft nicht über MarginV, sondern pro Dialogue-Event via `\pos` (siehe `build_ass`) —
+/// so kann jede Zeile ihre eigene `position_y` haben, ohne pro Position eine eigene
+/// Style-Variante zu brauchen. Alignment/MarginV hier sind daher nur Formalität.
+fn style_definition(name: &str, font: &str, size: u32, primary_color_hex: &str) -> String {
     let outline = (size as f32 * 0.09).round().max(2.0) as u32;
     let primary = hex_to_ass_style_color(primary_color_hex);
     format!(
-        "Style: {name},{font},{size},{primary},&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1\n"
+        "Style: {name},{font},{size},{primary},&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,{outline},0,5,0,0,0,1\n"
     )
 }
 
@@ -444,13 +458,14 @@ fn rounded_rect_drawing(w: f32, h: f32, r: f32) -> String {
 
 /// Baut für eine Wort-Highlight-Zeile mehrere Dialogue-Events (eins pro Wort-Zeitfenster),
 /// bei denen jeweils genau das gerade gesprochene Wort per Inline-Farb-Tag hervorgehoben ist.
-fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
+fn word_highlight_events(line: &SubtitleLine, style_name: &str, cx: f32, cy: f32) -> String {
     let accent_inline = hex_to_ass_inline(&line.accent_color);
+    let pos_tag = format!("{{\\an5\\pos({cx:.0},{cy:.0})}}");
 
     if line.words.is_empty() {
         // Fallback ohne Wortdaten: ganze Zeile wie im klassischen Stil anzeigen.
         return format!(
-            "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
+            "Dialogue: 0,{start},{end},{style},,0,0,0,,{pos_tag}{text}\n",
             start = format_ass_time(line.start_ms),
             end = format_ass_time(line.end_ms),
             style = style_name,
@@ -489,7 +504,7 @@ fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
         }
 
         events.push_str(&format!(
-            "Dialogue: 0,{start_ts},{end_ts},{style},,0,0,0,,{text}\n",
+            "Dialogue: 0,{start_ts},{end_ts},{style},,0,0,0,,{pos_tag}{text}\n",
             start_ts = format_ass_time(start),
             end_ts = format_ass_time(end),
             style = style_name,
@@ -502,10 +517,7 @@ fn word_highlight_events(line: &SubtitleLine, style_name: &str) -> String {
 /// eigenen Style. Drei Stile stehen zur Wahl: klassisch (fett, Rand), Box (gezeichnetes
 /// abgerundetes Rechteck als Hintergrund) und Wort-Highlight (aktuelles Wort leuchtet auf).
 fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String {
-    let margin_v = (play_res_y as f32 * 0.28).round() as u32;
-    let margin_lr = (play_res_x as f32 * 0.05).round() as u32;
     let cx = play_res_x as f32 / 2.0;
-    let cy = (play_res_y as f32 - margin_v as f32).max(0.0);
 
     let mut style_names: HashMap<String, String> = HashMap::new();
     let mut style_defs = String::new();
@@ -514,6 +526,10 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
 
     for line in lines {
         let size = scale_to_video_height(line.font_size, play_res_y);
+        // Aus der Drag-Vorschau im Frontend; per Dialogue-Event via \pos gesetzt (nicht
+        // über die Style-MarginV), damit jede Zeile unabhängig positioniert werden kann,
+        // ohne für jede Position eine eigene Style-Variante zu brauchen.
+        let cy = (line.position_y.clamp(0.0, 1.0) * play_res_y as f32).round();
 
         match line.style {
             SubtitleStyle::Box => {
@@ -580,16 +596,16 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
                     .or_insert_with(|| {
                         counter += 1;
                         let name = format!("S{counter}_{}", sanitize_style_name(&line.font));
-                        style_defs.push_str(&style_definition(&name, &line.font, size, primary_color, margin_lr, margin_v));
+                        style_defs.push_str(&style_definition(&name, &line.font, size, primary_color));
                         name
                     })
                     .clone();
 
                 if line.style == SubtitleStyle::WordHighlight {
-                    events.push_str(&word_highlight_events(line, &style_name));
+                    events.push_str(&word_highlight_events(line, &style_name, cx, cy));
                 } else {
                     events.push_str(&format!(
-                        "Dialogue: 0,{start},{end},{style},,0,0,0,,{text}\n",
+                        "Dialogue: 0,{start},{end},{style},,0,0,0,,{{\\an5\\pos({cx:.0},{cy:.0})}}{text}\n",
                         start = format_ass_time(line.start_ms),
                         end = format_ass_time(line.end_ms),
                         style = style_name,
@@ -696,6 +712,7 @@ mod tests {
             font_size: 28,
             style,
             accent_color: DEFAULT_ACCENT_COLOR_HEX.to_string(),
+            position_y: default_position_y(),
             words: Vec::new(),
         }
     }
@@ -779,8 +796,27 @@ mod tests {
         assert!(ass.contains(",-1,0,0,0,100,100,0,0,1,"));
         // dritte Zeile nutzt denselben Style wie die erste (kein doppelter Style-Eintrag)
         assert_eq!(ass.matches("Fontname").count(), 1);
-        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00,S1_Arial,,0,0,0,,Hallo"));
-        assert!(ass.contains("Dialogue: 0,0:00:02.00,0:00:03.00,S1_Arial,,0,0,0,,nochmal Arial"));
+        // cy = position_y (default 0.72) * play_res_y (1920), positioniert via \pos statt MarginV
+        assert!(ass.contains("Dialogue: 0,0:00:00.00,0:00:01.00,S1_Arial,,0,0,0,,{\\an5\\pos(540,1382)}Hallo"));
+        assert!(ass.contains("Dialogue: 0,0:00:02.00,0:00:03.00,S1_Arial,,0,0,0,,{\\an5\\pos(540,1382)}nochmal Arial"));
+    }
+
+    #[test]
+    fn different_lines_can_have_independent_vertical_positions() {
+        // Kern des Preview-Drag-Features: zwei Zeilen mit demselben Stil, aber
+        // unterschiedlicher position_y müssen unterschiedliche \pos-Koordinaten bekommen,
+        // ohne dass dafür getrennte Styles nötig sind.
+        let mut top = line("Oben", 0, 1000, SubtitleStyle::Classic);
+        top.position_y = 0.2;
+        let mut bottom = line("Unten", 1000, 2000, SubtitleStyle::Classic);
+        bottom.position_y = 0.9;
+
+        let ass = build_ass(&[top, bottom], 1000, 1000);
+
+        assert!(ass.contains("{\\an5\\pos(500,200)}Oben"));
+        assert!(ass.contains("{\\an5\\pos(500,900)}Unten"));
+        // beide teilen sich denselben Style trotz unterschiedlicher Position
+        assert_eq!(ass.matches("Fontname").count(), 1);
     }
 
     #[test]
@@ -975,6 +1011,7 @@ mod tests {
                 font_size: 28,
                 style: styles[i % styles.len()],
                 accent_color: DEFAULT_ACCENT_COLOR_HEX.to_string(),
+                position_y: default_position_y(),
                 words: s.words,
             })
             .collect();

@@ -31,6 +31,8 @@ export interface SubtitleLine extends TranscriptSegment {
   style: SubtitleStyleId;
   /** Hex-Farbe: Textfarbe bei Klassisch, Box-Hintergrund bzw. hervorgehobenes Wort sonst. */
   accentColor: string;
+  /** Vertikale Position als Bruchteil der Bildhöhe von oben (0 = oben, 1 = unten). */
+  positionY: number;
 }
 
 // Erste Auswahl gängiger, auf macOS/Windows vorinstallierter Fonts.
@@ -52,6 +54,10 @@ export const AVAILABLE_FONTS = [
 export const DEFAULT_FONT_SIZE = 64;
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyleId = "classic";
+
+// Deckt sich mit default_position_y() in src-tauri/src/subtitles.rs (28% Abstand vom
+// unteren Rand) — per Drag in der Vorschau änderbar.
+export const DEFAULT_POSITION_Y = 0.72;
 
 // Kräftiges Gelb — genutzt für Box-Hintergrund und Wort-Highlight, im UI änderbar.
 export const DEFAULT_ACCENT_COLOR = "#FFD400";
