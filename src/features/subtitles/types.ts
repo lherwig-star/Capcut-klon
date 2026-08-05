@@ -21,7 +21,7 @@ export interface SubtitleStyleOption {
 
 export const SUBTITLE_STYLES: SubtitleStyleOption[] = [
   { id: "classic", label: "Klassisch", description: "Fett, weiß, mit Rand" },
-  { id: "box", label: "Box", description: "Schwarzer Text auf goldenem Balken" },
+  { id: "box", label: "Box", description: "Schwarzer Text in schwerer Schrift auf farbigem Balken" },
   { id: "word-highlight", label: "Wort-Highlight", description: "Aktuell gesprochenes Wort leuchtet auf" },
 ];
 
@@ -31,12 +31,17 @@ export interface SubtitleLine extends TranscriptSegment {
   style: SubtitleStyleId;
   /** Hex-Farbe: Textfarbe bei Klassisch, Box-Hintergrund bzw. hervorgehobenes Wort sonst. */
   accentColor: string;
+  /** Vertikale Position als Bruchteil der Bildhöhe von oben (0 = oben, 1 = unten). */
+  positionY: number;
 }
 
 // Erste Auswahl gängiger, auf macOS/Windows vorinstallierter Fonts.
 // TODO: echte System-Font-Liste einlesen statt fest zu verdrahten.
+// Hinweis: Der Box-Stil bildet Arial/Helvetica intern auf "Arial Black" ab — ein reines
+// Bold wirkt dort neben den Social-Video-Vorlagen zu dünn (siehe heavy_font_for in Rust).
 export const AVAILABLE_FONTS = [
   "Arial",
+  "Arial Black",
   "Helvetica",
   "Impact",
   "Times New Roman",
@@ -49,6 +54,10 @@ export const AVAILABLE_FONTS = [
 export const DEFAULT_FONT_SIZE = 64;
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyleId = "classic";
+
+// Deckt sich mit default_position_y() in src-tauri/src/subtitles.rs (28% Abstand vom
+// unteren Rand) — per Drag in der Vorschau änderbar.
+export const DEFAULT_POSITION_Y = 0.72;
 
 // Kräftiges Gelb — genutzt für Box-Hintergrund und Wort-Highlight, im UI änderbar.
 export const DEFAULT_ACCENT_COLOR = "#FFD400";
