@@ -123,7 +123,16 @@ export function usePreviewEngine(
           onScreen.add(asset.id);
           const el = getVideoElement(asset);
           el.muted = track.muted;
-          const target = clamp(localTime, 0, Math.max(0, asset.durationSec - 0.05));
+          // asset.durationSec is 0 for a video whose real length could not be determined
+          // (some streamed/live-recorded containers report Infinity, normalised to 0 in
+          // mediaProbe.ts). Math.max(0, 0 - 0.05) would then clamp every target to zero,
+          // freezing that clip on its first frame for its entire run - during playback
+          // and while scrubbing alike, since both branches read this same target. Only
+          // clamp against the upper bound when there is a known one to clamp against.
+          const target =
+            asset.durationSec > 0
+              ? clamp(localTime, 0, Math.max(0, asset.durationSec - 0.05))
+              : Math.max(0, localTime);
 
           if (playing) {
             if (Math.abs(el.currentTime - target) > PLAYBACK_DRIFT_TOLERANCE_SEC) {
@@ -201,6 +210,23 @@ export function usePreviewEngine(
   useEffect(() => {
     if (!isPlaying) drawFrame(timeline.playheadSec);
   }, [timeline, isPlaying, drawFrame]);
+
+  // Starts loading every video referenced anywhere on the timeline, not just the clip
+  // currently under the playhead. Without this, a <video> element for a clip is created
+  // by drawFrame only once the playhead reaches it - for a clip whose asset was never
+  // touched before, that's the very moment playback needs a decoded frame from it, and
+  // the seconds it can take to buffer enough data show up as a black flash mid-playback.
+  // Warming every clip up front means it has had as long as possible to buffer by the
+  // time the playhead actually gets there.
+  useEffect(() => {
+    for (const track of timeline.tracks) {
+      if (track.kind !== "video") continue;
+      for (const clip of track.clips) {
+        const asset = assets.find((a) => a.id === clip.assetId);
+        if (asset?.kind === "video") getVideoElement(asset);
+      }
+    }
+  }, [timeline, assets, getVideoElement]);
 
   // Assets removed from the library must not stay loaded — or audible.
   useEffect(() => {
