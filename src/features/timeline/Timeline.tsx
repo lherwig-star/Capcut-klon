@@ -75,6 +75,9 @@ export function Timeline({ assets, timelineApi }: TimelineProps) {
   }
 
   function handleRulerPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    // Stops the browser from starting a text selection across the tick labels. Its own
+    // selection gesture would take the pointer over and leave the scrub stuck mid-drag.
+    event.preventDefault();
     // Capture on the ruler, so a scrub that wanders off it keeps tracking the pointer.
     event.currentTarget.setPointerCapture(event.pointerId);
     isScrubbingRef.current = true;
