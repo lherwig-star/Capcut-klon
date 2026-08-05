@@ -216,6 +216,8 @@ if (-not $hasMsvc) {
 
 Write-Step "Quellcode holen"
 
+$updateSkipped = $false
+
 if ($mode -eq "clone") {
     Write-Note "klone $Repo ($Branch)"
     & git clone --branch $Branch $Repo $Destination | Out-Host
@@ -231,21 +233,34 @@ if ($mode -eq "clone") {
     # Kein grosses Umlaut-A in dieser Datei: als CP1252 fehlgelesen wird daraus ein
     # tiefes Anführungszeichen, das PowerShell als String-Beginn wertet und den Rest
     # der Datei verschluckt. Der BOM verhindert das - das hier auch ohne ihn.
+    # Der Build veraendert selbst Dateien im Projekt: die Tauri-CLI traegt benoetigte
+    # Feature-Flags in src-tauri/Cargo.toml ein, npm kann package-lock.json umschreiben.
+    # Solche Aenderungen als "Arbeit des Nutzers" zu werten hiesse, dass der erste Lauf
+    # jeden weiteren blockiert und das Skript fortan stillschweigend den alten Stand baut
+    # - genau das ist passiert. Statt zu raten, welche Datei von wem stammt, legt
+    # --autostash alles beiseite, zieht nach und stellt es wieder her.
     $dirty = & git -C $projectDir status --porcelain
     if ($dirty) {
-        Write-Warn "Im Projektordner liegen nicht gesicherte eigene Anpassungen:"
-        $dirty | Select-Object -First 10 | ForEach-Object { Write-Warn "  $_" }
-        Write-Warn "Sie bleiben unangetastet - das Update wird übersprungen."
-        Write-Warn "Erst committen oder verwerfen, dann erneut starten."
-    } else {
-        & git -C $projectDir fetch origin $Branch | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "git fetch ist fehlgeschlagen" }
+        Write-Note "lokale Aenderungen werden fuer das Update beiseitegelegt:"
+        $dirty | Select-Object -First 10 | ForEach-Object { Write-Note "  $_" }
+    }
+
+    & git -C $projectDir fetch origin $Branch | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "git fetch ist fehlgeschlagen" }
+
+    $current = (& git -C $projectDir rev-parse --abbrev-ref HEAD).Trim()
+    if ($current -ne $Branch) {
         & git -C $projectDir checkout $Branch | Out-Host
-        & git -C $projectDir pull --ff-only origin $Branch | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            throw ("git pull ist fehlgeschlagen. Der lokale Branch ist vermutlich " +
-                   "auseinandergelaufen - bitte von Hand zusammenführen.")
-        }
+        if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch ist fehlgeschlagen" }
+    }
+
+    & git -C $projectDir pull --ff-only --autostash origin $Branch | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "git pull ist fehlgeschlagen - es wird der vorhandene Stand gebaut."
+        Write-Warn "Moegliche Ursachen: der Branch ist auseinandergelaufen, oder eine"
+        Write-Warn "beiseitegelegte Aenderung liess sich nicht zurueckspielen ('git stash list')."
+        $updateSkipped = $true
+    } else {
         Write-Ok "auf dem aktuellen Stand von $Branch"
     }
 } elseif ($mode -eq "pull") {
@@ -325,7 +340,24 @@ if (-not $NoShortcut) {
     Write-Ok "Verknüpfung: $shortcutPath"
 }
 
+# --------------------------------------------------------------------------
+# Zusammenfassung
+# --------------------------------------------------------------------------
+
 Write-Host "`nFertig." -ForegroundColor White
+
+# Der Build scrollt seitenweise vorbei; ohne diese Zeile bliebe unklar, welcher Stand
+# gerade in der .exe steckt - genau die Frage, wenn eine Korrektur nicht anzukommen scheint.
+if (Test-Path (Join-Path $projectDir ".git")) {
+    $built = & git -C $projectDir log -1 --format="%h %s"
+    Write-Host "Gebaut aus: $built" -ForegroundColor Gray
+}
+if ($updateSkipped) {
+    Write-Warn ""
+    Write-Warn "ACHTUNG: Das Update wurde uebersprungen (siehe oben) - dies ist der alte Stand."
+    Write-Warn ""
+}
+
 Write-Host "Die App startet per Doppelklick auf die Verknüpfung - ohne Konsolenfenster." -ForegroundColor Gray
 if ($Bundle) {
     Write-Host "Installer liegen unter src-tauri\target\release\bundle\." -ForegroundColor Gray
