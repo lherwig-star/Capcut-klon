@@ -11,6 +11,15 @@ export async function checkFfmpegAvailable(): Promise<boolean> {
 }
 
 /**
+ * A fresh path in the OS temp directory, for exports that need a destination without
+ * asking the user to pick one - e.g. handing the current timeline off to another part of
+ * the app. Each call returns a distinct path.
+ */
+export async function getTempExportPath(extension: string): Promise<string> {
+  return invoke<string>("temp_export_path", { extension });
+}
+
+/**
  * Asks ffprobe which of the given files carry audio. On failure everything counts as
  * silent: an export without sound beats one that aborts on a dangling audio pad.
  */

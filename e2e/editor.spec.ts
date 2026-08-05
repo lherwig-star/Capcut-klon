@@ -14,6 +14,8 @@ window.__TAURI_INTERNALS__ = {
     if (cmd === "plugin:dialog|save") return "C:\\\\videos\\\\out.mp4";
     if (cmd === "check_ffmpeg_available") return true;
     if (cmd === "probe_audio_streams") return [true];
+    if (cmd === "temp_export_path") return "/tmp/capcut-klon-handoff-test.mp4";
+    if (cmd === "export_video") return null;
     if (cmd === "plugin:event|listen") return 0;
     return null;
   },
@@ -162,6 +164,23 @@ test("keeps following the pointer for the whole scrub", async ({ page }) => {
 
   // A scrub that gets stuck reports the same time from the point it froze onwards.
   expect(atEnd).not.toBe(midway);
+});
+
+test("hands the cut clip off to the subtitle tool without a manual import", async ({ page }) => {
+  await importClip(page);
+
+  await page.getByRole("button", { name: "Für Untertitel verwenden" }).click();
+
+  // Renders in the background, then switches tabs on its own - the whole point being
+  // that nothing here asks the user to pick a file.
+  await expect(page.locator(".subtitle-editor")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".subtitle-editor .path")).toHaveText("/tmp/capcut-klon-handoff-test.mp4");
+  // The dialog-based picker must stay untouched by the handoff.
+  await expect(page.getByRole("button", { name: "Transkribieren" })).toBeEnabled();
+});
+
+test("keeps the handoff button disabled with nothing cut yet", async ({ page }) => {
+  await expect(page.getByRole("button", { name: "Für Untertitel verwenden" })).toBeDisabled();
 });
 
 test("advances the playhead when play is pressed", async ({ page }) => {

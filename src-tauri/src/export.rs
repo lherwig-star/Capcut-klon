@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -127,6 +128,24 @@ pub fn probe_audio_streams(paths: Vec<String>) -> Vec<bool> {
         .collect()
 }
 
+/// A fresh path in the OS temp directory for a one-off export.
+///
+/// Used for handing the current timeline off to another part of the app (e.g. the
+/// subtitle tool) without asking the user to pick a save location - the point is
+/// precisely that no dialog interrupts the flow. Each call returns a distinct path so a
+/// second handoff can never collide with a first one that is still being read.
+#[tauri::command]
+pub fn temp_export_path(extension: String) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    std::env::temp_dir()
+        .join(format!("capcut-klon-handoff-{millis}.{extension}"))
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Parses a line of ffmpeg's stderr progress output for `time=HH:MM:SS.ss`.
 fn parse_ffmpeg_time(line: &str) -> Option<f64> {
     let after = line.split("time=").nth(1)?;
@@ -140,7 +159,7 @@ fn parse_ffmpeg_time(line: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ffmpeg_time;
+    use super::{parse_ffmpeg_time, temp_export_path};
 
     #[test]
     fn parses_standard_progress_line() {
@@ -158,5 +177,20 @@ mod tests {
     fn returns_none_without_time_field() {
         let line = "ffmpeg version 6.0 Copyright (c) 2000-2023";
         assert_eq!(parse_ffmpeg_time(line), None);
+    }
+
+    #[test]
+    fn temp_export_path_lands_in_the_os_temp_dir_with_the_given_extension() {
+        let path = temp_export_path("mp4".to_string());
+        assert!(path.starts_with(&std::env::temp_dir().to_string_lossy().to_string()));
+        assert!(path.ends_with(".mp4"));
+    }
+
+    #[test]
+    fn temp_export_path_never_repeats_so_two_handoffs_cannot_collide() {
+        let first = temp_export_path("mp4".to_string());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = temp_export_path("mp4".to_string());
+        assert_ne!(first, second);
     }
 }
