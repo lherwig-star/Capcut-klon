@@ -5,6 +5,10 @@
   min-height: 0;
   /* Damit .timeline__scroll wirklich scrollt statt zu wachsen. */
   min-width: 0;
+  /* Ein Zug über das Lineal ist ein Scrub, keine Textauswahl. Ohne diese Zeile
+     markiert der Browser die Zeitangaben und seine eigene Auswahl-Geste reißt den
+     Zeiger an sich - das Scrubben bleibt dann mitten in der Bewegung hängen. */
+  user-select: none;
 }
 
 .timeline__toolbar {
@@ -81,6 +85,8 @@
 .timeline__ruler-wrap {
   position: relative;
   cursor: pointer;
+  /* Der Zeiger gehört hier dem Scrubben, nicht dem Scrollen oder Wischen. */
+  touch-action: none;
 }
 
 .timeline__tracks {

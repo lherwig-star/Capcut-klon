@@ -119,6 +119,40 @@ test("draws the clip rather than leaving the canvas blank", async ({ page }) => 
   expect(hasColour, "the preview stayed black").toBe(true);
 });
 
+test("marks the timeline chrome as unselectable", async ({ page }) => {
+  await importClip(page);
+
+  // Asserted as a property rather than by dragging: Playwright's synthetic mouse input
+  // does not start a native text selection, so a drag-based test passes even with the
+  // guard removed and would prove nothing. What breaks in a real browser is the
+  // selection gesture taking the pointer over, and this is the property that stops it.
+  for (const selector of [".timeline__ruler-wrap", ".timeline-ruler__label", ".track-row__lane"]) {
+    const userSelect = await page
+      .locator(selector)
+      .first()
+      .evaluate((el) => getComputedStyle(el).userSelect);
+    expect(userSelect, `${selector} is selectable`).toBe("none");
+  }
+});
+
+test("keeps following the pointer for the whole scrub", async ({ page }) => {
+  await importClip(page);
+  const ruler = (await page.locator(".timeline__ruler-wrap").boundingBox())!;
+  const y = ruler.y + ruler.height / 2;
+  const timecode = () => page.locator(".timeline__timecode").first().textContent();
+
+  await page.mouse.move(ruler.x + 40, y);
+  await page.mouse.down();
+  await page.mouse.move(ruler.x + 150, y);
+  const midway = await timecode();
+  await page.mouse.move(ruler.x + 400, y);
+  const atEnd = await timecode();
+  await page.mouse.up();
+
+  // A scrub that gets stuck reports the same time from the point it froze onwards.
+  expect(atEnd).not.toBe(midway);
+});
+
 test("advances the playhead when play is pressed", async ({ page }) => {
   await importClip(page);
 
