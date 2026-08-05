@@ -19,6 +19,9 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      # The export suite drives a real ffmpeg where one exists and skips itself where it
+      # does not, so it stays useful locally without making ffmpeg a CI prerequisite.
+      - run: npm test
 
   rust:
     name: Cargo Check (src-tauri)
@@ -30,3 +33,18 @@ jobs:
         with:
           workspaces: src-tauri
       - run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  e2e:
+    name: Browser-Smoke-Test (Layout & Wiedergabe)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Faengt, was jsdom nicht kann: dass die Timeline das Layout aufweitet und die
+      # Vorschau aus dem Bild schiebt, sieht man erst mit echter Layout-Berechnung.
+      - run: npm run test:e2e

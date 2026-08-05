@@ -8,8 +8,13 @@ const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
 
 /** Metadata has to arrive within this window, otherwise the file counts as unreadable. */
 const METADATA_TIMEOUT_MS = 15_000;
-/** Thumbnails are best-effort: if the seek stalls we import the asset without one. */
-const THUMBNAIL_TIMEOUT_MS = 4_000;
+/**
+ * Thumbnails are best-effort: if the seek stalls, probeVideo falls back to whatever frame
+ * is already decoded rather than leaving the asset without one. Generous on purpose - the
+ * first read of a real file through Tauri's asset protocol (disk I/O, antivirus scanning)
+ * can be slower than a synthetic test clip ever is.
+ */
+const THUMBNAIL_TIMEOUT_MS = 6_000;
 
 export function detectMediaKind(path: string): MediaKind | null {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
@@ -43,15 +48,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+// Spelled out rather than read off the global MediaError: this runs inside an error
+// handler, and a ReferenceError thrown there would leave the import promise pending
+// forever — the very hang this module exists to avoid. The values are fixed by spec.
+const MEDIA_ERR_ABORTED = 1;
+const MEDIA_ERR_NETWORK = 2;
+const MEDIA_ERR_DECODE = 3;
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+
 function mediaErrorMessage(el: HTMLMediaElement, name: string): string {
   switch (el.error?.code) {
-    case MediaError.MEDIA_ERR_ABORTED:
+    case MEDIA_ERR_ABORTED:
       return `${name}: Laden wurde abgebrochen.`;
-    case MediaError.MEDIA_ERR_NETWORK:
+    case MEDIA_ERR_NETWORK:
       return `${name}: Datei konnte nicht gelesen werden (Zugriff verweigert?).`;
-    case MediaError.MEDIA_ERR_DECODE:
+    case MEDIA_ERR_DECODE:
       return `${name}: Datei ist beschädigt oder unvollständig.`;
-    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+    case MEDIA_ERR_SRC_NOT_SUPPORTED:
       return `${name}: Codec/Container wird vom System-Player nicht unterstützt.`;
     default:
       return `${name}: Datei konnte nicht geladen werden.`;
@@ -78,44 +91,49 @@ function loadVideoMetadata(video: HTMLVideoElement, name: string): Promise<Video
 }
 
 /**
- * Grabs a still frame. Resolves with `undefined` rather than rejecting, because a missing
- * thumbnail must never keep an otherwise valid file out of the library. Note that seeking to the
- * position the element already sits at fires no `seeked` event, so the target is nudged off zero
- * and the timeout in the caller covers whatever the WebView decides not to report.
+ * Draws whatever frame the element currently has decoded. `undefined` if there is none yet -
+ * critically, this checks readyState and not just videoWidth/videoHeight: dimensions are
+ * already known at HAVE_METADATA, well before a frame exists to draw. Skipping that check
+ * would risk capturing a guaranteed-black canvas and reporting it as a successful thumbnail,
+ * silently reproducing the exact bug this function exists to avoid.
  */
-function captureThumbnail(video: HTMLVideoElement, duration: number): Promise<string | undefined> {
+function grabVideoFrame(video: HTMLVideoElement): string | undefined {
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return undefined;
+  if (!video.videoWidth || !video.videoHeight) return undefined;
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return undefined;
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  try {
+    return canvas.toDataURL("image/jpeg", 0.7);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Grabs a still frame near the middle of the clip. Resolves with `undefined` rather than
+ * rejecting, because a missing thumbnail must never keep an otherwise valid file out of the
+ * library. Note that seeking to the position the element already sits at fires no `seeked`
+ * event, so the target is nudged off zero and the timeout in the caller covers whatever the
+ * WebView decides not to report.
+ */
+function captureThumbnail(video: HTMLVideoElement): Promise<string | undefined> {
   return new Promise<string | undefined>((resolve) => {
-    const draw = () => {
-      if (!video.videoWidth || !video.videoHeight) {
-        resolve(undefined);
-        return;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        resolve(undefined);
-        return;
-      }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      try {
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
-      } catch {
-        resolve(undefined);
-      }
-    };
+    const target =
+      Number.isFinite(video.duration) && video.duration > 0 ? Math.min(0.5, video.duration / 2) : 0;
 
-    video.onseeked = draw;
-    video.onerror = () => resolve(undefined);
-
-    const target = duration > 0 ? Math.min(0.5, duration / 2) : 0;
     if (target <= 0 || Math.abs(video.currentTime - target) < 0.001) {
       // No seek would happen - draw whatever frame is decoded once data is available.
-      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) draw();
-      else video.onloadeddata = draw;
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) resolve(grabVideoFrame(video));
+      else video.onloadeddata = () => resolve(grabVideoFrame(video));
       return;
     }
+
+    video.onseeked = () => resolve(grabVideoFrame(video));
+    video.onerror = () => resolve(undefined);
     video.currentTime = target;
   });
 }
@@ -143,10 +161,15 @@ async function probeVideo(url: string, name: string) {
       `${name}: Zeitüberschreitung beim Lesen der Metadaten.`,
     );
     const thumbnailUrl = await withTimeout(
-      captureThumbnail(video, meta.duration),
+      captureThumbnail(video),
       THUMBNAIL_TIMEOUT_MS,
       "thumbnail-timeout",
-    ).catch(() => undefined);
+    ).catch(() => {
+      // The seek to the target frame never finished - most likely a slow first disk read
+      // through the asset protocol, not a decode failure. Whatever the decoder already
+      // has on screen (typically the first frame) beats falling back to the generic icon.
+      return grabVideoFrame(video);
+    });
     return { ...meta, thumbnailUrl };
   } finally {
     releaseMediaElement(video);

@@ -28,7 +28,19 @@ function suggestedOutputPath(videoPath: string): string {
   return `${match[1]}_untertitelt${match[2]}`;
 }
 
-export function SubtitleEditor() {
+interface SubtitleEditorProps {
+  /**
+   * A video handed in from elsewhere in the app (currently: the video editor's "an
+   * Untertitel übergeben" handoff), so it opens here already loaded instead of making
+   * the user pick the just-exported file by hand. Every value change loads it, including
+   * a repeated handoff of a freshly re-rendered cut - the caller is expected to hand in a
+   * fresh path each time (e.g. a temp file with a new name) rather than mutating one in
+   * place, since an unchanged value here intentionally does nothing.
+   */
+  initialVideoPath?: string | null;
+}
+
+export function SubtitleEditor({ initialVideoPath = null }: SubtitleEditorProps = {}) {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [lines, setLines] = useState<SubtitleLine[]>([]);
   const [defaultFont, setDefaultFont] = useState<string>(AVAILABLE_FONTS[0]);
@@ -36,6 +48,18 @@ export function SubtitleEditor() {
   const [defaultAccentColor, setDefaultAccentColor] = useState<string>(DEFAULT_ACCENT_COLOR);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState(false);
+
+  // Adjusts state during render rather than in an effect (React's documented pattern for
+  // resetting state from a changed prop): applying the handoff in an effect would commit
+  // a wasted render with the stale video first. appliedHandoffPath is what stops this from
+  // looping - without it every render would see initialVideoPath "changed" again.
+  const [appliedHandoffPath, setAppliedHandoffPath] = useState<string | null>(null);
+  if (initialVideoPath && initialVideoPath !== appliedHandoffPath) {
+    setAppliedHandoffPath(initialVideoPath);
+    setVideoPath(initialVideoPath);
+    setLines([]);
+    setStatus("Video aus dem Editor übernommen.");
+  }
 
   async function pickVideo() {
     const selected = await open({

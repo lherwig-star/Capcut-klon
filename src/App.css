@@ -122,9 +122,9 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Primäre Call-to-Action-Buttons: Import, Exportieren, Transkribieren, Rendern, Submit */
+/* Primäre Call-to-Action-Buttons: Import, Untertitel-Übergabe, Exportieren, Transkribieren, Rendern, Submit */
 .media-library__header button,
-.app__header > button,
+.app__header-actions > button,
 .export-panel__submit,
 .subtitle-editor .btn-primary {
   background-color: var(--color-primary);
@@ -133,7 +133,7 @@ button:disabled {
 }
 
 .media-library__header button:hover:not(:disabled),
-.app__header > button:hover:not(:disabled),
+.app__header-actions > button:hover:not(:disabled),
 .export-panel__submit:hover:not(:disabled),
 .subtitle-editor .btn-primary:hover:not(:disabled) {
   background-color: var(--color-primary-hover);
@@ -144,6 +144,12 @@ button:disabled {
   grid-template-rows: auto 1fr auto;
   height: 100vh;
   min-height: 0;
+  /* Die Timeline ist breiter als jedes Fenster. Ohne diese beiden Zeilen weiten
+     ihre Inhalte das gesamte Layout auf - Grid-Kinder haben min-width: auto und
+     schrumpfen nicht unter ihre Inhaltsbreite -, wodurch die Vorschau aus dem
+     sichtbaren Bereich geschoben wird, statt dass die Timeline in sich scrollt. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .app__header {
@@ -187,6 +193,21 @@ button:disabled {
   box-shadow: 0 1px 0 0 oklch(1 0 0 / 4%) inset;
 }
 
+.app__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.app__handoff-error {
+  font-size: 12px;
+  color: var(--color-destructive);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app__subtitles {
   min-height: 0;
   overflow-y: auto;
@@ -197,6 +218,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 300px 1fr;
   min-height: 0;
+  min-width: 0;
 }
 
 .app__sidebar {
@@ -208,6 +230,7 @@ button:disabled {
 
 .app__preview {
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   background: var(--color-background);
 }
@@ -217,4 +240,6 @@ button:disabled {
   border-top: 1px solid var(--color-border);
   background: var(--color-panel);
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }

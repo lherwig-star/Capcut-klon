@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { MediaAsset, TimelineState } from "../../shared/types";
 import { formatTimecode } from "../../shared/time";
-import { buildFfmpegArgs } from "./buildFfmpegArgs";
-import { checkFfmpegAvailable, runExport } from "./runExport";
+import { exportTimeline } from "./exportTimeline";
+import { checkFfmpegAvailable } from "./runExport";
 import "./ExportPanel.css";
 
 interface ExportPanelProps {
@@ -39,11 +39,10 @@ export function ExportPanel({ timeline, assets, durationSec, onClose }: ExportPa
     });
     if (!outputPath) return;
 
-    const plan = buildFfmpegArgs(timeline, assets, { outputPath, width, height, fps });
     setStatus("exporting");
     setProgress(0);
     try {
-      await runExport(plan.args, plan.totalSeconds, (payload) => {
+      await exportTimeline(timeline, assets, { outputPath, width, height, fps }, (payload) => {
         setProgress(payload.totalSeconds > 0 ? Math.min(1, payload.secondsDone / payload.totalSeconds) : 0);
       });
       setStatus("done");

@@ -5,6 +5,15 @@ import "./ClipBlock.css";
 
 type DragKind = "move" | "trim-start" | "trim-end";
 
+/** Movement below this counts as a click, not a drag. */
+const DRAG_THRESHOLD_PX = 3;
+/**
+ * Narrower than this and the two 8px trim handles would leave almost nothing to grab for
+ * moving, so a short clip drops them and stays draggable as a whole. Zooming in brings
+ * them back.
+ */
+const MIN_WIDTH_FOR_HANDLES_PX = 40;
+
 interface ClipBlockProps {
   clip: Clip;
   asset: MediaAsset | undefined;
@@ -37,7 +46,15 @@ export function ClipBlock({ clip, asset, trackId, pxPerSec, isSelected, onSelect
 
   function commit(event: ReactPointerEvent<HTMLDivElement>) {
     if (!dragKind) return;
-    const deltaSec = (event.clientX - dragStartX.current) / pxPerSec;
+    const deltaPx = event.clientX - dragStartX.current;
+    setDragKind(null);
+    setPreviewDeltaPx(0);
+
+    // A click is a selection, nothing more. Committing it as a zero-length move would
+    // rebuild the timeline state and re-render every track for no change at all.
+    if (Math.abs(deltaPx) < DRAG_THRESHOLD_PX) return;
+
+    const deltaSec = deltaPx / pxPerSec;
     if (dragKind === "move") {
       onMove(clip.id, trackId, clip.start + deltaSec);
     } else if (dragKind === "trim-start") {
@@ -45,8 +62,6 @@ export function ClipBlock({ clip, asset, trackId, pxPerSec, isSelected, onSelect
     } else {
       onTrim(clip.id, "end", deltaSec);
     }
-    setDragKind(null);
-    setPreviewDeltaPx(0);
   }
 
   let left = clip.start * pxPerSec;
@@ -60,6 +75,7 @@ export function ClipBlock({ clip, asset, trackId, pxPerSec, isSelected, onSelect
     width += previewDeltaPx;
   }
   width = Math.max(6, width);
+  const showHandles = clip.duration * pxPerSec >= MIN_WIDTH_FOR_HANDLES_PX;
 
   return (
     <div
@@ -71,13 +87,23 @@ export function ClipBlock({ clip, asset, trackId, pxPerSec, isSelected, onSelect
       onPointerCancel={commit}
       title={asset?.name}
     >
-      <div className="clip-block__handle clip-block__handle--start" onPointerDown={(event) => beginDrag(event, "trim-start")} />
+      {showHandles && (
+        <div
+          className="clip-block__handle clip-block__handle--start"
+          onPointerDown={(event) => beginDrag(event, "trim-start")}
+        />
+      )}
       <div className="clip-block__body">
         {asset?.thumbnailUrl && <img className="clip-block__thumb" src={asset.thumbnailUrl} alt="" draggable={false} />}
         <span className="clip-block__label">{asset?.name ?? "Clip"}</span>
         <span className="clip-block__duration">{formatTimecode(clip.duration)}</span>
       </div>
-      <div className="clip-block__handle clip-block__handle--end" onPointerDown={(event) => beginDrag(event, "trim-end")} />
+      {showHandles && (
+        <div
+          className="clip-block__handle clip-block__handle--end"
+          onPointerDown={(event) => beginDrag(event, "trim-end")}
+        />
+      )}
     </div>
   );
 }

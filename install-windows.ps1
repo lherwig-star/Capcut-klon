@@ -1,16 +1,26 @@
-<#
+﻿<#
 .SYNOPSIS
     Baut den CapCut-Klon unter Windows und legt eine Desktop-Verknüpfung an.
 
 .DESCRIPTION
     Installiert fehlende Voraussetzungen (Node, Rust, ffmpeg, WebView2) über
-    winget, baut die App und verlinkt die fertige .exe auf dem Desktop. Mehrfach
-    ausführbar: was schon da ist, wird in Ruhe gelassen.
+    winget, holt den Quellcode, baut die App und verlinkt die fertige .exe auf
+    dem Desktop. Mehrfach ausführbar: was schon da ist, wird in Ruhe gelassen.
+
+    Zum Aktualisieren einfach erneut ausführen. Liegt das Projekt schon als
+    Git-Arbeitskopie vor, wird der Stand per fetch/pull nachgezogen statt
+    daneben eine zweite Kopie anzulegen - dadurch bleiben auch die Build-Caches
+    von Cargo und npm erhalten und der Neubau dauert Sekunden statt Minuten.
 
     Die gebaute .exe startet ohne Konsolenfenster - anders als "npm run tauri
     dev", das ein Terminal braucht, weil Vite und der Rust-Watcher darin laufen.
 
 .EXAMPLE
+    # Erstinstallation an einem beliebigen Ort - klont nach %USERPROFILE%\Capcut-klon
+    powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
+
+.EXAMPLE
+    # Aktualisieren: aus dem Projektordner heraus erneut starten
     powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
 
 .EXAMPLE
@@ -20,7 +30,11 @@
 
 [CmdletBinding()]
 param(
+    [string] $Repo = "https://github.com/lherwig-star/Capcut-klon.git",
+    [string] $Branch = "main",
+    [string] $Destination = (Join-Path $HOME "Capcut-klon"),
     [switch] $SkipDependencies,
+    [switch] $SkipUpdate,
     [switch] $Bundle,
     [switch] $NoShortcut
 )
@@ -111,7 +125,9 @@ function Test-MsvcToolchain {
         und ein falscher Negativbefund soll niemanden ausbremsen, der die
         Build Tools längst hat.
     #>
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    $programFiles = ${env:ProgramFiles(x86)}
+    if (-not $programFiles) { return $false }
+    $vswhere = Join-Path $programFiles "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) { return $false }
     $found = & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
@@ -133,12 +149,25 @@ Update-PathFromRegistry
 
 Write-Step "Projekt suchen"
 
-if (-not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot "package.json"))) {
-    throw ("Dieses Skript muss im Projektordner liegen (neben package.json). " +
-           "Entpacke das Projekt und starte es von dort.")
+# Wo der Quellcode herkommt, wird vor dem Installieren entschieden - nur ein Klonen
+# braucht git, eine vorhandene Arbeitskopie nicht zwingend.
+$projectDir = $null
+$mode = "clone"
+
+if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot "package.json"))) {
+    # Das Skript liegt im Projekt: geklont, oder aus einem ZIP entpackt.
+    $projectDir = $PSScriptRoot
+    $mode = if (Test-Path (Join-Path $PSScriptRoot ".git")) { "pull" } else { "local" }
+    Write-Ok "Projekt: $projectDir"
+} elseif (Test-Path (Join-Path $Destination "package.json")) {
+    $projectDir = $Destination
+    $mode = if (Test-Path (Join-Path $Destination ".git")) { "pull" } else { "local" }
+    Write-Note "vorhandene Kopie gefunden: $projectDir"
+} else {
+    Write-Note "das Projekt wird nach $Destination geklont"
 }
-$projectDir = $PSScriptRoot
-Write-Ok "Projekt: $projectDir"
+
+$needsGit = ($mode -eq "clone")
 
 # --------------------------------------------------------------------------
 # Voraussetzungen
@@ -161,6 +190,8 @@ if (-not $SkipDependencies) {
               -Verify { Test-Command "ffmpeg" })) { exit 1 }
     if (-not (Install-WithWinget -PackageId "Microsoft.EdgeWebView2Runtime" -Label "WebView2-Runtime" `
               -Verify { Test-WebView2 })) { exit 1 }
+    if ($needsGit -and -not (Install-WithWinget -PackageId "Git.Git" -Label "Git" `
+              -Verify { Test-Command "git" })) { exit 1 }
 } else {
     Write-Step "Voraussetzungen übersprungen (-SkipDependencies)"
 }
@@ -177,6 +208,67 @@ if (-not $hasMsvc) {
     Write-Warn "Rust braucht sie unter Windows zum Linken. Falls der Build gleich am Linker"
     Write-Warn "scheitert: https://visualstudio.microsoft.com/visual-cpp-build-tools/"
     Write-Warn "installieren und dort 'Desktopentwicklung mit C++' anhaken."
+}
+
+# --------------------------------------------------------------------------
+# Quellcode holen bzw. aktualisieren
+# --------------------------------------------------------------------------
+
+Write-Step "Quellcode holen"
+
+$updateSkipped = $false
+
+if ($mode -eq "clone") {
+    Write-Note "klone $Repo ($Branch)"
+    & git clone --branch $Branch $Repo $Destination | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "git clone ist fehlgeschlagen" }
+    $projectDir = $Destination
+    Write-Ok "geklont nach $projectDir"
+} elseif ($mode -eq "pull" -and -not $SkipUpdate) {
+    # In der vorhandenen Arbeitskopie aktualisieren statt daneben eine zweite anzulegen:
+    # so bleiben target/ und node_modules erhalten, und der Build dauert Sekunden.
+    Write-Note "aktualisiere $projectDir"
+
+    # Nicht gesicherte eigene Arbeit würde ein Pull überschreiben.
+    # Kein grosses Umlaut-A in dieser Datei: als CP1252 fehlgelesen wird daraus ein
+    # tiefes Anführungszeichen, das PowerShell als String-Beginn wertet und den Rest
+    # der Datei verschluckt. Der BOM verhindert das - das hier auch ohne ihn.
+    # Der Build veraendert selbst Dateien im Projekt: die Tauri-CLI traegt benoetigte
+    # Feature-Flags in src-tauri/Cargo.toml ein, npm kann package-lock.json umschreiben.
+    # Solche Aenderungen als "Arbeit des Nutzers" zu werten hiesse, dass der erste Lauf
+    # jeden weiteren blockiert und das Skript fortan stillschweigend den alten Stand baut
+    # - genau das ist passiert. Statt zu raten, welche Datei von wem stammt, legt
+    # --autostash alles beiseite, zieht nach und stellt es wieder her.
+    $dirty = & git -C $projectDir status --porcelain
+    if ($dirty) {
+        Write-Note "lokale Aenderungen werden fuer das Update beiseitegelegt:"
+        $dirty | Select-Object -First 10 | ForEach-Object { Write-Note "  $_" }
+    }
+
+    & git -C $projectDir fetch origin $Branch | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "git fetch ist fehlgeschlagen" }
+
+    $current = (& git -C $projectDir rev-parse --abbrev-ref HEAD).Trim()
+    if ($current -ne $Branch) {
+        & git -C $projectDir checkout $Branch | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch ist fehlgeschlagen" }
+    }
+
+    & git -C $projectDir pull --ff-only --autostash origin $Branch | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "git pull ist fehlgeschlagen - es wird der vorhandene Stand gebaut."
+        Write-Warn "Moegliche Ursachen: der Branch ist auseinandergelaufen, oder eine"
+        Write-Warn "beiseitegelegte Aenderung liess sich nicht zurueckspielen ('git stash list')."
+        $updateSkipped = $true
+    } else {
+        Write-Ok "auf dem aktuellen Stand von $Branch"
+    }
+} elseif ($mode -eq "pull") {
+    Write-Note "Update übersprungen (-SkipUpdate)"
+} else {
+    Write-Warn "Kein Git-Ordner - dieser Stand lässt sich nicht automatisch aktualisieren."
+    Write-Warn "Für künftige Updates das Skript einmal ohne Projektordner starten, dann"
+    Write-Warn "wird nach $Destination geklont und ein erneuter Aufruf zieht per git nach."
 }
 
 # --------------------------------------------------------------------------
@@ -248,7 +340,24 @@ if (-not $NoShortcut) {
     Write-Ok "Verknüpfung: $shortcutPath"
 }
 
+# --------------------------------------------------------------------------
+# Zusammenfassung
+# --------------------------------------------------------------------------
+
 Write-Host "`nFertig." -ForegroundColor White
+
+# Der Build scrollt seitenweise vorbei; ohne diese Zeile bliebe unklar, welcher Stand
+# gerade in der .exe steckt - genau die Frage, wenn eine Korrektur nicht anzukommen scheint.
+if (Test-Path (Join-Path $projectDir ".git")) {
+    $built = & git -C $projectDir log -1 --format="%h %s"
+    Write-Host "Gebaut aus: $built" -ForegroundColor Gray
+}
+if ($updateSkipped) {
+    Write-Warn ""
+    Write-Warn "ACHTUNG: Das Update wurde uebersprungen (siehe oben) - dies ist der alte Stand."
+    Write-Warn ""
+}
+
 Write-Host "Die App startet per Doppelklick auf die Verknüpfung - ohne Konsolenfenster." -ForegroundColor Gray
 if ($Bundle) {
     Write-Host "Installer liegen unter src-tauri\target\release\bundle\." -ForegroundColor Gray

@@ -45,6 +45,15 @@ export function getTimelineDuration(state: TimelineState): number {
   return max;
 }
 
+/**
+ * Guards the reducer's entry points against a non-finite number. These values come from
+ * pointer maths against element rects; one NaN slipping through would land in a clip's
+ * timing and quietly poison every later overlap check, duration and export.
+ */
+function finiteOr(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback;
+}
+
 function clipsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd - 1e-6 && bStart < aEnd - 1e-6;
 }
@@ -102,10 +111,10 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
         id: createId("clip"),
         assetId: action.assetId,
         trackId: action.trackId,
-        start: Math.max(0, action.start),
-        duration: Math.max(0.05, action.duration),
-        inPoint: action.inPoint,
-        outPoint: action.outPoint,
+        start: Math.max(0, finiteOr(action.start, 0)),
+        duration: Math.max(0.05, finiteOr(action.duration, 0.05)),
+        inPoint: finiteOr(action.inPoint, 0),
+        outPoint: finiteOr(action.outPoint, 0),
       };
       let placed = false;
       const tracks = state.tracks.map((track) => {
@@ -123,7 +132,11 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
       const targetTrack = state.tracks.find((track) => track.id === action.trackId);
       if (!found || !targetTrack || targetTrack.kind !== found.track.kind) return state;
 
-      const candidate: Clip = { ...found.clip, trackId: action.trackId, start: Math.max(0, action.start) };
+      const candidate: Clip = {
+        ...found.clip,
+        trackId: action.trackId,
+        start: Math.max(0, finiteOr(action.start, found.clip.start)),
+      };
       const siblings =
         targetTrack.id === found.track.id
           ? targetTrack.clips.filter((c) => c.id !== candidate.id)
@@ -158,10 +171,12 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
       if (!found) return state;
       const { clip, track } = found;
 
+      const requestedDelta = finiteOr(action.deltaSec, 0);
+
       if (action.edge === "start") {
         const maxDelta = clip.duration - 0.1;
         const minDelta = -clip.inPoint;
-        const delta = clamp(action.deltaSec, minDelta, maxDelta);
+        const delta = clamp(requestedDelta, minDelta, maxDelta);
         if (Math.abs(delta) < 1e-6) return state;
         const candidate: Clip = {
           ...clip,
@@ -175,7 +190,7 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
 
       const maxDelta = action.assetDurationSec - clip.outPoint;
       const minDelta = -(clip.duration - 0.1);
-      const delta = clamp(action.deltaSec, minDelta, maxDelta);
+      const delta = clamp(requestedDelta, minDelta, maxDelta);
       if (Math.abs(delta) < 1e-6) return state;
       const candidate: Clip = { ...clip, duration: clip.duration + delta, outPoint: clip.outPoint + delta };
       if (hasCollision(track, candidate)) return state;
@@ -186,7 +201,7 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
       const found = findClip(state, action.clipId);
       if (!found) return state;
       const { clip, track } = found;
-      const localOffset = action.atSec - clip.start;
+      const localOffset = finiteOr(action.atSec, clip.start) - clip.start;
       if (localOffset <= 0.05 || localOffset >= clip.duration - 0.05) return state;
 
       const first: Clip = { ...clip, duration: localOffset, outPoint: clip.inPoint + localOffset };
@@ -229,10 +244,10 @@ export function timelineReducer(state: TimelineState, action: TimelineAction): T
       return { ...state, selectedClipId: action.clipId };
 
     case "set-playhead":
-      return { ...state, playheadSec: Math.max(0, action.sec) };
+      return { ...state, playheadSec: Math.max(0, finiteOr(action.sec, state.playheadSec)) };
 
     case "set-zoom":
-      return { ...state, zoomPxPerSec: clamp(action.pxPerSec, 10, 400) };
+      return { ...state, zoomPxPerSec: clamp(finiteOr(action.pxPerSec, state.zoomPxPerSec), 10, 400) };
 
     case "toggle-track-mute":
       return {
