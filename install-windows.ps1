@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Baut den CapCut-Klon unter Windows und legt eine Desktop-Verknüpfung an.
 
@@ -227,10 +227,13 @@ if ($mode -eq "clone") {
     # so bleiben target/ und node_modules erhalten, und der Build dauert Sekunden.
     Write-Note "aktualisiere $projectDir"
 
-    # Eigene, noch nicht gesicherte Änderungen würden von einem Pull überschrieben.
+    # Nicht gesicherte eigene Arbeit würde ein Pull überschreiben.
+    # Kein grosses Umlaut-A in dieser Datei: als CP1252 fehlgelesen wird daraus ein
+    # tiefes Anführungszeichen, das PowerShell als String-Beginn wertet und den Rest
+    # der Datei verschluckt. Der BOM verhindert das - das hier auch ohne ihn.
     $dirty = & git -C $projectDir status --porcelain
     if ($dirty) {
-        Write-Warn "Es liegen ungesicherte Änderungen im Projektordner:"
+        Write-Warn "Im Projektordner liegen nicht gesicherte eigene Anpassungen:"
         $dirty | Select-Object -First 10 | ForEach-Object { Write-Warn "  $_" }
         Write-Warn "Sie bleiben unangetastet - das Update wird übersprungen."
         Write-Warn "Erst committen oder verwerfen, dann erneut starten."
