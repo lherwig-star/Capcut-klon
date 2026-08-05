@@ -14,6 +14,7 @@ window.__TAURI_INTERNALS__ = {
     if (cmd === "plugin:dialog|save") return "C:\\\\videos\\\\out.mp4";
     if (cmd === "check_ffmpeg_available") return true;
     if (cmd === "probe_audio_streams") return [true];
+    if (cmd === "video_thumbnail") return null; // kein ffmpeg im Browser-Test -> Browser-Fallback
     if (cmd === "temp_export_path") return "/tmp/capcut-klon-handoff-test.mp4";
     if (cmd === "export_video") return null;
     if (cmd === "plugin:event|listen") return 0;

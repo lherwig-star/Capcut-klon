@@ -243,3 +243,61 @@ button:disabled {
   min-width: 0;
   overflow: hidden;
 }
+
+.app__handoff-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+}
+
+.app__handoff-card {
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  border-radius: var(--radius-xl);
+  background: var(--color-elevated);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: var(--shadow-pop);
+  text-align: center;
+}
+
+.app__handoff-card h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.app__handoff-card p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-muted-foreground);
+}
+
+.app__handoff-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-sunken);
+  overflow: hidden;
+}
+
+.app__handoff-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-primary);
+  transition: width 0.2s ease;
+}
+
+.app__handoff-percent {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted-foreground);
+}

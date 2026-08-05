@@ -40,7 +40,11 @@ struct ExportFinished {
 
 /// Runs the system-installed ffmpeg with the given filter-graph args and streams
 /// progress back to the frontend via the "export://progress" / "export://finished" events.
-#[tauri::command]
+// (async) statt nur (command): Tauri fuehrt synchrone Befehle auf dem Haupt-Thread aus.
+// Dieser hier blockiert bis ffmpeg fertig ist - also fror die gesamte Oberflaeche fuer
+// die Dauer des Renderns ein. Das Attribut laesst die Funktion synchron bleiben, spawnt
+// sie aber abseits des Haupt-Threads.
+#[tauri::command(async)]
 pub fn export_video(app: AppHandle, args: Vec<String>, total_seconds: f64) -> Result<(), String> {
     let mut child = hidden_command("ffmpeg")
         .args(&args)
@@ -88,7 +92,7 @@ pub fn export_video(app: AppHandle, args: Vec<String>, total_seconds: f64) -> Re
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn check_ffmpeg_available() -> bool {
     hidden_command("ffmpeg")
         .arg("-version")
@@ -106,7 +110,7 @@ pub fn check_ffmpeg_available() -> bool {
 /// input that has none is a fatal error for the whole render, not a skippable warning.
 /// A file ffprobe cannot read counts as having no audio - the video pass will surface the
 /// real problem with a better message than a broken audio chain would.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn probe_audio_streams(paths: Vec<String>) -> Vec<bool> {
     paths
         .iter()
@@ -144,6 +148,59 @@ pub fn temp_export_path(extension: String) -> String {
         .join(format!("capcut-klon-handoff-{millis}.{extension}"))
         .to_string_lossy()
         .to_string()
+}
+
+/// Extracts a still frame as a base64 JPEG data URL, or `None` if ffmpeg cannot.
+///
+/// Done here rather than by drawing the <video> element onto a canvas in the frontend,
+/// because that route cannot work in the packaged app: the page is served from
+/// tauri.localhost while convertFileSrc hands out asset.localhost URLs, so the canvas is
+/// cross-origin-tainted and toDataURL throws SecurityError - silently, since the caller
+/// can only catch it and fall back. Going through ffmpeg also produces a thumbnail for
+/// codecs the WebView cannot decode at all.
+#[tauri::command(async)]
+pub fn video_thumbnail(path: String, at_seconds: f64) -> Option<String> {
+    // -ss before -i seeks by keyframe, which is fast even on a long file. scale keeps the
+    // data URL small; -1 preserves the aspect ratio.
+    let output = hidden_command("ffmpeg")
+        .args(["-v", "error", "-ss"])
+        .arg(format!("{at_seconds:.3}"))
+        .args(["-i"])
+        .arg(&path)
+        .args([
+            "-frames:v", "1",
+            "-vf", "scale=320:-1",
+            "-f", "image2",
+            "-vcodec", "mjpeg",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "data:image/jpeg;base64,{}",
+        base64_encode(&output.stdout)
+    ))
+}
+
+/// Minimal base64 encoder - avoids pulling in a crate for one call site.
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 /// Parses a line of ffmpeg's stderr progress output for `time=HH:MM:SS.ss`.
@@ -184,6 +241,30 @@ mod tests {
         let path = temp_export_path("mp4".to_string());
         assert!(path.starts_with(&std::env::temp_dir().to_string_lossy().to_string()));
         assert!(path.ends_with(".mp4"));
+    }
+
+    #[test]
+    fn base64_matches_the_rfc4648_test_vectors() {
+        use super::base64_encode;
+        // All three padding cases, from RFC 4648 section 10.
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_covers_the_whole_byte_range() {
+        use super::base64_encode;
+        // JPEG data is arbitrary binary; the high bytes must not be mangled.
+        let all: Vec<u8> = (0u8..=255).collect();
+        let encoded = base64_encode(&all);
+        assert_eq!(encoded.len(), 344); // 256 bytes -> ceil(256/3)*4
+        assert!(encoded.starts_with("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"));
+        assert!(encoded.ends_with("f4+fr7/P3+/w=="));
     }
 
     #[test]
