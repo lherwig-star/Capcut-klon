@@ -2,6 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { ColorSwatches } from "./ColorSwatches";
 import {
   AVAILABLE_FONTS,
   DEFAULT_ACCENT_COLOR,
@@ -192,12 +193,11 @@ export function SubtitleEditor({ initialVideoPath = null }: SubtitleEditorProps 
           </select>
         </label>
         <label className="color-field">
-          Farbe{" "}
-          <input
-            type="color"
+          Farbe
+          <ColorSwatches
             value={defaultAccentColor}
-            onChange={(e) => applyAccentColorToAll(e.target.value)}
-            title="Farbe für Box-Hintergrund bzw. Wort-Highlight"
+            onChange={applyAccentColorToAll}
+            title="Textfarbe (Klassisch) bzw. Box-/Highlight-Farbe"
           />
         </label>
       </div>
@@ -239,12 +239,11 @@ export function SubtitleEditor({ initialVideoPath = null }: SubtitleEditorProps 
                       </option>
                     ))}
                   </select>
-                  <input
-                    type="color"
-                    className="segment__color"
+                  <ColorSwatches
                     value={line.accentColor}
-                    onChange={(e) => updateLine(i, { accentColor: e.target.value })}
-                    title="Farbe für Box-Hintergrund bzw. Wort-Highlight"
+                    onChange={(color) => updateLine(i, { accentColor: color })}
+                    compact
+                    title="Textfarbe (Klassisch) bzw. Box-/Highlight-Farbe"
                   />
                 </div>
               </li>
