@@ -144,6 +144,12 @@ button:disabled {
   grid-template-rows: auto 1fr auto;
   height: 100vh;
   min-height: 0;
+  /* Die Timeline ist breiter als jedes Fenster. Ohne diese beiden Zeilen weiten
+     ihre Inhalte das gesamte Layout auf - Grid-Kinder haben min-width: auto und
+     schrumpfen nicht unter ihre Inhaltsbreite -, wodurch die Vorschau aus dem
+     sichtbaren Bereich geschoben wird, statt dass die Timeline in sich scrollt. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .app__header {
@@ -197,6 +203,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 300px 1fr;
   min-height: 0;
+  min-width: 0;
 }
 
 .app__sidebar {
@@ -208,6 +215,7 @@ button:disabled {
 
 .app__preview {
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   background: var(--color-background);
 }
@@ -217,4 +225,6 @@ button:disabled {
   border-top: 1px solid var(--color-border);
   background: var(--color-panel);
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }

@@ -20,8 +20,12 @@
 }
 
 .preview-panel__stage canvas {
-  max-width: 100%;
-  max-height: 100%;
+  /* Die Zeichenfläche ist fest 1280x720; max-* allein würde sie nur verkleinern
+     und den Rest des Platzes ungenutzt lassen. width/height plus object-fit füllt
+     die Bühne aus und behält dabei das Seitenverhältnis. */
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   background: #000;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-stage);
