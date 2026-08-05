@@ -316,34 +316,119 @@ fn box_bg_style_definition(name: &str, accent_color_hex: &str) -> String {
 }
 
 /// Text-Style fürs Box-Layer: schwarze, sehr fette Schrift. `size` ist hier bereits die
-/// hochskalierte Box-Schriftgröße (siehe `layout_box_text`), nicht die Basisgröße der Zeile.
+/// hochskalierte Box-Schriftgröße (siehe `build_ass`), nicht die Basisgröße der Zeile.
 fn box_text_style_definition(name: &str, font: &str, size: u32) -> String {
     format!("Style: {name},{font},{size},&H00000000,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n")
 }
 
-/// Berechnet Anzeige-Text (ggf. mit Skalierungs-Tag) sowie Breite/Höhe des Box-Hintergrunds.
-/// Ohne echte Textmetrik (die hat nur libass zur Renderzeit) wird die Breite grob aus der
-/// Zeichenanzahl geschätzt. Wichtig: die Box darf nie über `max_width` hinausgehen — lange
-/// Wörter/Zeilen werden per `\fscx\fscy` proportional verkleinert statt über den Rand zu
-/// laufen (Bug aus dem letzten Test: Box hatte keine feste Begrenzung).
-fn layout_box_text(text: &str, size: u32, play_res_x: u32) -> (String, f32, f32) {
+/// Der Box-Stil lebt von einer wirklich schweren Schrift (siehe Social-Video-Vorlagen) —
+/// ein bloßes Bold auf Arial wirkt daneben dünn. Reguläre Grotesk-Familien werden deshalb
+/// auf ihre schwerste auf macOS/Windows vorhandene Variante abgebildet; bereits schwere
+/// Familien (Impact) und Serifen bleiben, wie sie sind.
+fn heavy_font_for(font: &str) -> &str {
+    match font {
+        "Arial" | "Helvetica" => "Arial Black",
+        other => other,
+    }
+}
+
+/// Breite eines einzelnen Zeichens relativ zur Schriftgröße, für eine schwere Grotesk
+/// (Arial Black) an echten Renderings kalibriert. Ein pauschaler Mittelwert reicht hier
+/// nicht: er läuft entweder bei Versalien über oder lässt die Box bei Kleinbuchstaben
+/// unnötig breit wirken. Die Schätzung liegt bewusst ~10% über der Realität, damit der
+/// Text nie aus der gezeichneten Box herausläuft.
+fn char_width_factor(c: char) -> f32 {
+    match c {
+        'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' | '.' | ',' | '\'' | '!' | ':' | ';' | '|' => 0.30,
+        ' ' => 0.30,
+        'm' | 'w' | 'M' | 'W' => 0.85,
+        c if c.is_ascii_uppercase() => 0.62,
+        c if c.is_ascii_digit() => 0.58,
+        _ => 0.52,
+    }
+}
+
+/// Familien-Korrektur zur Zeichentabelle: Impact läuft schmal, eine normale Grotesk etwas
+/// schmaler als Arial Black.
+fn font_width_scale(font: &str) -> f32 {
+    match font {
+        "Arial Black" => 1.0,
+        "Impact" => 0.72,
+        "Arial" | "Helvetica" => 0.92,
+        _ => 0.95,
+    }
+}
+
+/// Gegen ausgemessene Renderings nachgezogen: die reine Zeichentabelle lag rund 10% zu
+/// hoch, wodurch die Box seitlich deutlich mehr Luft hatte als oben/unten. Ein kleiner
+/// Sicherheitsaufschlag bleibt bewusst drin — zu breit schätzen ist harmlos, zu schmal
+/// ließe den Text aus der gezeichneten Box laufen.
+const TEXT_WIDTH_CALIBRATION: f32 = 0.95;
+
+/// Geschätzte Textbreite in Pixeln (siehe `char_width_factor` zur Genauigkeit).
+fn estimate_text_width(text: &str, size: f32, font: &str) -> f32 {
+    let scale = font_width_scale(font) * TEXT_WIDTH_CALIBRATION;
+    text.chars().map(char_width_factor).sum::<f32>() * scale * size
+}
+
+/// Greedy Word-Wrap auf eine maximale Pixelbreite. Ein einzelnes überlanges Wort bekommt
+/// seine eigene Zeile, statt hart getrennt zu werden.
+fn wrap_text(text: &str, max_width_px: f32, size: f32, font: &str) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+            continue;
+        }
+        let candidate = format!("{current} {word}");
+        if estimate_text_width(&candidate, size, font) <= max_width_px {
+            current = candidate;
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Zeilenabstand relativ zur Schriftgröße — an echten Renderings gemessen (libass setzt
+/// die Grundlinien exakt eine Schriftgröße auseinander).
+const BOX_LINE_HEIGHT_FACTOR: f32 = 1.0;
+/// Höhe einer einzelnen Textzeile (Versalhöhe + Unterlänge), ebenfalls gemessen.
+const BOX_GLYPH_HEIGHT_FACTOR: f32 = 0.72;
+
+/// Legt Zeilenumbrüche und Boxmaße fest. Die Schriftgröße bleibt dabei **konstant**:
+/// zu langer Text wird umbrochen und die Box wächst nach unten, statt den Text kleiner
+/// zu skalieren (das sprang bei langen Zeilen sichtbar und wirkte unruhig).
+/// Ohne echte Textmetrik — die hat nur libass zur Renderzeit — wird die Breite geschätzt;
+/// die Faktoren sind gegen echte Renderings kalibriert.
+fn layout_box_text(text: &str, size: u32, font: &str, play_res_x: u32) -> (Vec<String>, f32, f32) {
     let max_width = play_res_x as f32 * 0.86;
     let size_f = size as f32;
-    let avg_char_width = size_f * 0.60;
-    let padding_x = size_f * 0.55;
-    let padding_y = size_f * 0.3;
-    let height = size_f * 1.25 + padding_y * 2.0;
+    let padding_x = size_f * 0.22;
+    let padding_y = size_f * 0.24;
 
-    let char_count = text.chars().count().max(1) as f32;
-    let natural_width = char_count * avg_char_width + padding_x * 2.0;
-    let escaped = escape_ass_text(text);
+    let usable_width = (max_width - padding_x * 2.0).max(size_f);
+    let lines = wrap_text(text, usable_width, size_f, font);
 
-    if natural_width <= max_width {
-        (escaped, natural_width, height)
-    } else {
-        let scale = ((max_width / natural_width) * 100.0).round().clamp(45.0, 100.0);
-        (format!("{{\\fscx{scale:.0}\\fscy{scale:.0}}}{escaped}"), max_width, height)
-    }
+    let widest = lines
+        .iter()
+        .map(|l| estimate_text_width(l, size_f, font))
+        .fold(0.0_f32, f32::max);
+    let width = (widest + padding_x * 2.0).min(max_width);
+
+    let text_block = (lines.len() as f32 - 1.0) * BOX_LINE_HEIGHT_FACTOR * size_f
+        + BOX_GLYPH_HEIGHT_FACTOR * size_f;
+    let height = text_block + padding_y * 2.0;
+    (lines, width, height)
 }
 
 /// Zeichnet ein abgerundetes Rechteck (Breite `w`, Höhe `h`, Eckradius `r`) als ASS-`\p`-
@@ -432,9 +517,10 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
 
         match line.style {
             SubtitleStyle::Box => {
-                // Box-Text bewusst größer als die Basisgröße für einen fetteren,
-                // präsenteren Eindruck (Nutzer-Feedback: "nicht dick/groß genug").
-                let box_font_size = ((size as f32) * 1.2).round() as u32;
+                // Box-Text bewusst größer und in einer schweren Schrift — Bold auf Arial
+                // wirkte neben der Vorlage dünn und klein (Nutzer-Feedback).
+                let box_font_size = ((size as f32) * 1.35).round() as u32;
+                let box_font = heavy_font_for(&line.font);
 
                 let bg_key = format!("boxbg|{}", line.accent_color);
                 let bg_style = style_names
@@ -447,19 +533,24 @@ fn build_ass(lines: &[SubtitleLine], play_res_x: u32, play_res_y: u32) -> String
                     })
                     .clone();
 
-                let text_key = format!("boxtext|{}|{box_font_size}", line.font);
+                let text_key = format!("boxtext|{box_font}|{box_font_size}");
                 let text_style = style_names
                     .entry(text_key)
                     .or_insert_with(|| {
                         counter += 1;
                         let name = format!("ST{counter}");
-                        style_defs.push_str(&box_text_style_definition(&name, &line.font, box_font_size));
+                        style_defs.push_str(&box_text_style_definition(&name, box_font, box_font_size));
                         name
                     })
                     .clone();
 
-                let (display_text, w, h) = layout_box_text(&line.text, box_font_size, play_res_x);
-                let radius = (box_font_size as f32 * 0.32).max(4.0);
+                let (text_lines, w, h) = layout_box_text(&line.text, box_font_size, box_font, play_res_x);
+                let display_text = text_lines
+                    .iter()
+                    .map(|l| escape_ass_text(l))
+                    .collect::<Vec<_>>()
+                    .join("\\N");
+                let radius = (box_font_size as f32 * 0.28).max(4.0);
                 let bg_path = rounded_rect_drawing(w, h, radius);
 
                 events.push_str(&format!(
@@ -777,20 +868,70 @@ mod tests {
     }
 
     #[test]
-    fn layout_box_text_fits_within_max_width_for_short_text() {
-        let (text, w, _h) = layout_box_text("Kurz", 60, 1080);
-        assert_eq!(text, "Kurz");
+    fn layout_box_text_keeps_short_text_on_one_line() {
+        let (lines, w, _h) = layout_box_text("Kurz", 60, "Arial Black", 1080);
+        assert_eq!(lines, vec!["Kurz".to_string()]);
         assert!(w < 1080.0 * 0.86);
     }
 
     #[test]
-    fn layout_box_text_scales_down_long_words_to_stay_within_bounds() {
-        // Ein einzelnes sehr langes Wort darf die Box nie über den Rand hinaus wachsen
-        // lassen (gemeldeter Bug: Box hatte keine feste Begrenzung).
-        let (text, w, _h) = layout_box_text("Donaudampfschifffahrtsgesellschaftskapitaen", 80, 1080);
+    fn layout_box_text_wraps_instead_of_shrinking_and_grows_box_vertically() {
+        // Früher wurde langer Text per \fscx herunterskaliert — die Schrift sprang dabei
+        // sichtbar in der Größe. Jetzt bleibt die Größe konstant und die Box wird höher.
+        let font = "Arial Black";
+        let (short_lines, _sw, short_h) = layout_box_text("Hallo Welt", 80, font, 1080);
+        let (long_lines, long_w, long_h) =
+            layout_box_text("Hallo und herzlich willkommen zu diesem langen Test", 80, font, 1080);
+
+        assert_eq!(short_lines.len(), 1);
+        assert!(long_lines.len() > 1, "langer Text muss umbrechen: {long_lines:?}");
+        assert!(long_h > short_h, "Box muss vertikal wachsen");
+        assert!(long_w <= 1080.0 * 0.86 + 0.5, "Box darf nie über die Grenze hinaus");
+    }
+
+    #[test]
+    fn layout_box_text_gives_an_overlong_word_its_own_line_without_exceeding_bounds() {
+        let (lines, w, _h) =
+            layout_box_text("Donaudampfschifffahrtsgesellschaftskapitaen kommt", 80, "Arial Black", 1080);
         assert!(w <= 1080.0 * 0.86 + 0.5);
-        assert!(text.contains("\\fscx"));
-        assert!(text.contains("\\fscy"));
+        // Das überlange Wort steht allein, "kommt" rutscht in die nächste Zeile.
+        assert_eq!(lines[0], "Donaudampfschifffahrtsgesellschaftskapitaen");
+        assert_eq!(lines[1], "kommt");
+    }
+
+    #[test]
+    fn wraps_greedily_at_the_pixel_budget() {
+        let font = "Arial Black";
+        // "aa" ist bei Größe 100 rund 104px breit -> zwei davon passen nicht in 150px.
+        assert_eq!(wrap_text("aa aa aa", 150.0, 100.0, font), vec!["aa", "aa", "aa"]);
+        // Ein einzelnes zu breites Wort wird nicht getrennt, sondern bleibt allein stehen.
+        assert_eq!(wrap_text("unteilbar", 10.0, 100.0, font), vec!["unteilbar"]);
+        assert_eq!(wrap_text("", 500.0, 100.0, font), vec![""]);
+    }
+
+    #[test]
+    fn estimates_wide_glyphs_wider_than_narrow_ones() {
+        let font = "Arial Black";
+        // Ein pauschaler Mittelwert würde beide gleich breit schätzen — genau das ließ die
+        // Box früher bei Kleinbuchstaben aufgebläht und bei Versalien zu knapp wirken.
+        assert!(estimate_text_width("MMMM", 100.0, font) > estimate_text_width("iiii", 100.0, font) * 2.0);
+        // Impact läuft schmaler als Arial Black.
+        assert!(estimate_text_width("Hallo", 100.0, "Impact") < estimate_text_width("Hallo", 100.0, font));
+    }
+
+    #[test]
+    fn box_style_uses_a_heavy_font_variant() {
+        // Bold auf Arial wirkte neben der Vorlage zu dünn — Grotesk-Familien werden
+        // deshalb auf ihre schwerste Variante abgebildet.
+        assert_eq!(heavy_font_for("Arial"), "Arial Black");
+        assert_eq!(heavy_font_for("Helvetica"), "Arial Black");
+        // Bereits schwere bzw. bewusst andersartige Familien bleiben unangetastet.
+        assert_eq!(heavy_font_for("Impact"), "Impact");
+        assert_eq!(heavy_font_for("Georgia"), "Georgia");
+
+        let lines = vec![line("Test", 0, 1000, SubtitleStyle::Box)];
+        let ass = build_ass(&lines, 1080, 1920);
+        assert!(ass.contains("Arial Black"), "Box-Style muss Arial Black nutzen:\n{ass}");
     }
 
     #[test]

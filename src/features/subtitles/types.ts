@@ -21,7 +21,7 @@ export interface SubtitleStyleOption {
 
 export const SUBTITLE_STYLES: SubtitleStyleOption[] = [
   { id: "classic", label: "Klassisch", description: "Fett, weiß, mit Rand" },
-  { id: "box", label: "Box", description: "Schwarzer Text auf goldenem Balken" },
+  { id: "box", label: "Box", description: "Schwarzer Text in schwerer Schrift auf farbigem Balken" },
   { id: "word-highlight", label: "Wort-Highlight", description: "Aktuell gesprochenes Wort leuchtet auf" },
 ];
 
@@ -35,8 +35,11 @@ export interface SubtitleLine extends TranscriptSegment {
 
 // Erste Auswahl gängiger, auf macOS/Windows vorinstallierter Fonts.
 // TODO: echte System-Font-Liste einlesen statt fest zu verdrahten.
+// Hinweis: Der Box-Stil bildet Arial/Helvetica intern auf "Arial Black" ab — ein reines
+// Bold wirkt dort neben den Social-Video-Vorlagen zu dünn (siehe heavy_font_for in Rust).
 export const AVAILABLE_FONTS = [
   "Arial",
+  "Arial Black",
   "Helvetica",
   "Impact",
   "Times New Roman",
