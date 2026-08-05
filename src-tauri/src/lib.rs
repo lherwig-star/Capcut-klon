@@ -50,6 +50,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             export::export_video,
             export::check_ffmpeg_available,
+            export::probe_audio_streams,
             default_whisper_model_path,
             transcribe_video,
             render_subtitled_video,

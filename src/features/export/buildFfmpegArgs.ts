@@ -15,9 +15,13 @@ export interface FfmpegPlan {
 
 /**
  * Translates the timeline into an ffmpeg filter_complex graph: a black base canvas with each
- * video clip overlaid during its [start, end) window, and an amix of the audio-track clips.
- * v1 scope: only clips on explicit "audio" tracks contribute sound - audio embedded in video
- * clips is dropped here until features/audio-editor's mixing lands.
+ * video clip overlaid during its [start, end) window, plus an amix carrying both the audio of
+ * the video clips themselves and whatever sits on the audio tracks.
+ *
+ * A video clip only contributes sound when its asset is known to have an audio stream.
+ * Referencing the audio pad of a silent file is not a warning but a hard failure that takes
+ * the entire render with it, so `hasAudio: undefined` is treated as "no" - callers that care
+ * probe first (see probeAudioStreams).
  */
 export function buildFfmpegArgs(timeline: TimelineState, assets: MediaAsset[], options: ExportOptions): FfmpegPlan {
   const totalSeconds = getTimelineDuration(timeline);
@@ -36,6 +40,20 @@ export function buildFfmpegArgs(timeline: TimelineState, assets: MediaAsset[], o
   }
 
   const filterParts: string[] = [`color=c=black:s=${width}x${height}:d=${totalSeconds.toFixed(3)}[base]`];
+  const audioLabels: string[] = [];
+  let audioStageCount = 0;
+
+  /** Trims a clip's slice out of an input's audio and slides it to its timeline position. */
+  function addAudioChain(inputIdx: number, clip: { start: number; inPoint: number; outPoint: number }) {
+    const label = `a${audioStageCount}`;
+    const delayMs = Math.max(0, Math.round(clip.start * 1000));
+    filterParts.push(
+      `[${inputIdx}:a]atrim=start=${clip.inPoint.toFixed(3)}:end=${clip.outPoint.toFixed(3)},` +
+        `asetpts=PTS-STARTPTS,adelay=delays=${delayMs}:all=1[${label}]`,
+    );
+    audioLabels.push(label);
+    audioStageCount += 1;
+  }
 
   let videoLabel = "base";
   let videoStageCount = 0;
@@ -48,6 +66,10 @@ export function buildFfmpegArgs(timeline: TimelineState, assets: MediaAsset[], o
       const clipLabel = `v${videoStageCount}`;
       const start = clip.start.toFixed(3);
       const end = (clip.start + clip.duration).toFixed(3);
+
+      if (asset.kind === "video" && asset.hasAudio && !track.muted) {
+        addAudioChain(inputIdx, clip);
+      }
 
       if (asset.kind === "image") {
         filterParts.push(
@@ -71,22 +93,12 @@ export function buildFfmpegArgs(timeline: TimelineState, assets: MediaAsset[], o
   }
   filterParts.push(`[${videoLabel}]null[vout]`);
 
-  const audioLabels: string[] = [];
-  let audioStageCount = 0;
   for (const track of timeline.tracks) {
     if (track.kind !== "audio" || track.muted) continue;
     for (const clip of track.clips) {
       const asset = assets.find((a) => a.id === clip.assetId);
       if (!asset || asset.kind !== "audio") continue;
-      const inputIdx = inputIndexFor(asset.id);
-      const label = `a${audioStageCount}`;
-      const delayMs = Math.max(0, Math.round(clip.start * 1000));
-      filterParts.push(
-        `[${inputIdx}:a]atrim=start=${clip.inPoint.toFixed(3)}:end=${clip.outPoint.toFixed(3)},` +
-          `asetpts=PTS-STARTPTS,adelay=delays=${delayMs}:all=1[${label}]`,
-      );
-      audioLabels.push(label);
-      audioStageCount += 1;
+      addAudioChain(inputIndexFor(asset.id), clip);
     }
   }
 

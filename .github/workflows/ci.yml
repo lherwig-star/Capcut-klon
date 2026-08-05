@@ -19,6 +19,9 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      # The export suite drives a real ffmpeg where one exists and skips itself where it
+      # does not, so it stays useful locally without making ffmpeg a CI prerequisite.
+      - run: npm test
 
   rust:
     name: Cargo Check (src-tauri)

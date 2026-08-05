@@ -1,12 +1,36 @@
-export interface TranscriptSegment {
+export interface WordTiming {
   startMs: number;
   endMs: number;
   text: string;
 }
 
+export interface TranscriptSegment {
+  startMs: number;
+  endMs: number;
+  text: string;
+  words: WordTiming[];
+}
+
+export type SubtitleStyleId = "classic" | "box" | "word-highlight";
+
+export interface SubtitleStyleOption {
+  id: SubtitleStyleId;
+  label: string;
+  description: string;
+}
+
+export const SUBTITLE_STYLES: SubtitleStyleOption[] = [
+  { id: "classic", label: "Klassisch", description: "Fett, weiß, mit Rand" },
+  { id: "box", label: "Box", description: "Schwarzer Text auf goldenem Balken" },
+  { id: "word-highlight", label: "Wort-Highlight", description: "Aktuell gesprochenes Wort leuchtet auf" },
+];
+
 export interface SubtitleLine extends TranscriptSegment {
   font: string;
   fontSize: number;
+  style: SubtitleStyleId;
+  /** Hex-Farbe, genutzt für den Box-Hintergrund bzw. das hervorgehobene Wort. */
+  accentColor: string;
 }
 
 // Erste Auswahl gängiger, auf macOS/Windows vorinstallierter Fonts.
@@ -23,3 +47,8 @@ export const AVAILABLE_FONTS = [
 // Referenzgröße bei 1920px Videohöhe (Rust skaliert das proportional auf die
 // tatsächliche Videoauflösung) — 64 ergibt gut lesbare, TikTok-artige Untertitel.
 export const DEFAULT_FONT_SIZE = 64;
+
+export const DEFAULT_SUBTITLE_STYLE: SubtitleStyleId = "classic";
+
+// Kräftiges Gelb — genutzt für Box-Hintergrund und Wort-Highlight, im UI änderbar.
+export const DEFAULT_ACCENT_COLOR = "#FFD400";

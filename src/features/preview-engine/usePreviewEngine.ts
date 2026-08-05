@@ -4,10 +4,24 @@ import type { MediaAsset, TimelineState } from "../../shared/types";
 import { drawContain, findActiveClip } from "./compositor";
 
 /**
+ * Drift the playing element is allowed before it gets re-seeked. Generous on purpose:
+ * a seek per frame stalls decoding, and this doubles as the fallback when the WebView
+ * refuses `play()` — the element then falls behind until a seek pulls it forward again,
+ * which degrades to a choppy preview instead of a frozen one.
+ */
+const PLAYBACK_DRIFT_TOLERANCE_SEC = 0.3;
+/** While paused, a seek shorter than this is not worth issuing. */
+const SCRUB_SEEK_EPSILON_SEC = 0.04;
+
+/**
  * Drives the canvas preview: keeps a pool of hidden <video>/<img> elements per asset,
- * composites the active clip on every video track for the current playhead position,
- * and runs the play/pause loop. Audio playback is intentionally out of scope here -
- * it's owned by features/audio-editor once track mixing exists.
+ * composites the active clip of every video track for the current playhead, and runs
+ * the play/pause loop.
+ *
+ * Playback lets the video elements run themselves and only corrects them when they
+ * drift. Seeking them frame by frame instead — the obvious reading of "draw the frame
+ * at time t" — never settles, because a seek is asynchronous and the next one arrives
+ * before the last has finished.
  */
 export function usePreviewEngine(
   timeline: TimelineState,
@@ -18,139 +32,223 @@ export function usePreviewEngine(
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoPool = useRef<Map<string, HTMLVideoElement>>(new Map());
   const imagePool = useRef<Map<string, HTMLImageElement>>(new Map());
+
+  // The render loop reads everything through refs. Were it to close over props
+  // directly, every playhead update would change its identity, restart the loop and
+  // reset the frame clock — leaving the playhead stuck where it started.
+  const timelineRef = useRef(timeline);
+  const assetsRef = useRef(assets);
+  const durationRef = useRef(durationSec);
+  const setPlayheadRef = useRef(setPlayhead);
   const playheadRef = useRef(timeline.playheadSec);
-  const lastFrameTimeRef = useRef<number | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const isPlayingRef = useRef(false);
+  const drawFrameRef = useRef<(atSec: number) => void>(() => {});
+
   const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
+    timelineRef.current = timeline;
     playheadRef.current = timeline.playheadSec;
-  }, [timeline.playheadSec]);
+  }, [timeline]);
+  useEffect(() => {
+    assetsRef.current = assets;
+  }, [assets]);
+  useEffect(() => {
+    durationRef.current = durationSec;
+  }, [durationSec]);
+  useEffect(() => {
+    setPlayheadRef.current = setPlayhead;
+  }, [setPlayhead]);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
+  const getVideoElement = useCallback((asset: MediaAsset): HTMLVideoElement => {
+    const existing = videoPool.current.get(asset.id);
+    if (existing) return existing;
+
+    const el = document.createElement("video");
+    el.src = asset.url;
+    el.preload = "auto";
+    el.playsInline = true;
+    // Loading and seeking both finish asynchronously. Without redrawing once they do,
+    // a paused preview keeps showing whatever was on the canvas before — and for a
+    // freshly created element that is nothing at all, since it has no decoded frame yet.
+    const redraw = () => {
+      if (!isPlayingRef.current) drawFrameRef.current(playheadRef.current);
+    };
+    el.addEventListener("loadeddata", redraw);
+    el.addEventListener("seeked", redraw);
+    videoPool.current.set(asset.id, el);
+    return el;
+  }, []);
+
+  const getImageElement = useCallback((asset: MediaAsset): HTMLImageElement => {
+    const existing = imagePool.current.get(asset.id);
+    if (existing) return existing;
+
+    const el = new Image();
+    el.addEventListener("load", () => {
+      if (!isPlayingRef.current) drawFrameRef.current(playheadRef.current);
+    });
+    el.src = asset.url;
+    imagePool.current.set(asset.id, el);
+    return el;
+  }, []);
+
+  const drawFrame = useCallback(
+    (atSec: number) => {
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (!canvas || !ctx) return;
+
+      const currentTimeline = timelineRef.current;
+      const currentAssets = assetsRef.current;
+      const playing = isPlayingRef.current;
+
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const onScreen = new Set<string>();
+
+      for (const track of currentTimeline.tracks) {
+        if (track.kind !== "video") continue;
+        const clip = findActiveClip(currentTimeline, track.id, atSec);
+        if (!clip) continue;
+        const asset = currentAssets.find((a) => a.id === clip.assetId);
+        if (!asset) continue;
+        const localTime = atSec - clip.start + clip.inPoint;
+
+        if (asset.kind === "video") {
+          onScreen.add(asset.id);
+          const el = getVideoElement(asset);
+          el.muted = track.muted;
+          const target = clamp(localTime, 0, Math.max(0, asset.durationSec - 0.05));
+
+          if (playing) {
+            if (Math.abs(el.currentTime - target) > PLAYBACK_DRIFT_TOLERANCE_SEC) {
+              el.currentTime = target;
+            }
+            if (el.paused) void el.play().catch(() => undefined);
+          } else {
+            if (!el.paused) el.pause();
+            if (Math.abs(el.currentTime - target) > SCRUB_SEEK_EPSILON_SEC) {
+              el.currentTime = target;
+            }
+          }
+
+          if (!track.hidden) {
+            drawContain(ctx, el, el.videoWidth, el.videoHeight, canvas.width, canvas.height);
+          }
+        } else if (asset.kind === "image" && !track.hidden) {
+          const img = getImageElement(asset);
+          drawContain(ctx, img, img.naturalWidth, img.naturalHeight, canvas.width, canvas.height);
+        }
+      }
+
+      // A clip the playhead has left keeps running — and keeps being audible — unless
+      // it is stopped explicitly.
+      for (const [assetId, el] of videoPool.current) {
+        if (!onScreen.has(assetId) && !el.paused) el.pause();
+      }
+    },
+    [getVideoElement, getImageElement],
+  );
+
+  useEffect(() => {
+    drawFrameRef.current = drawFrame;
+  }, [drawFrame]);
+
+  // Only isPlaying flips this on and off; drawFrame's identity is stable, so the loop
+  // survives the playhead updates it causes.
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    let raf = 0;
+    let cancelled = false;
+    let lastFrameTime = performance.now();
+
+    function tick(now: number) {
+      if (cancelled) return;
+      const deltaSec = (now - lastFrameTime) / 1000;
+      lastFrameTime = now;
+
+      const total = durationRef.current;
+      const next = playheadRef.current + deltaSec;
+
+      if (total <= 0 || next >= total) {
+        playheadRef.current = total;
+        setPlayheadRef.current(total);
+        drawFrame(total);
+        setIsPlaying(false);
+        return;
+      }
+
+      playheadRef.current = next;
+      setPlayheadRef.current(next);
+      drawFrame(next);
+      raf = requestAnimationFrame(tick);
+    }
+
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [isPlaying, drawFrame]);
+
+  // Redraws while paused: scrubbing, but also trimming or moving a clip.
+  useEffect(() => {
+    if (!isPlaying) drawFrame(timeline.playheadSec);
+  }, [timeline, isPlaying, drawFrame]);
+
+  // Assets removed from the library must not stay loaded — or audible.
   useEffect(() => {
     const validIds = new Set(assets.map((asset) => asset.id));
     for (const [id, el] of videoPool.current) {
-      if (!validIds.has(id)) {
-        el.pause();
-        el.removeAttribute("src");
-        videoPool.current.delete(id);
-      }
+      if (validIds.has(id)) continue;
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+      videoPool.current.delete(id);
     }
     for (const id of imagePool.current.keys()) {
       if (!validIds.has(id)) imagePool.current.delete(id);
     }
   }, [assets]);
 
-  function getVideoElement(asset: MediaAsset): HTMLVideoElement {
-    let el = videoPool.current.get(asset.id);
-    if (!el) {
-      el = document.createElement("video");
-      el.src = asset.url;
-      el.muted = true;
-      el.playsInline = true;
-      el.preload = "auto";
-      videoPool.current.set(asset.id, el);
-    }
-    return el;
-  }
-
-  function getImageElement(asset: MediaAsset): HTMLImageElement {
-    let el = imagePool.current.get(asset.id);
-    if (!el) {
-      el = new Image();
-      el.src = asset.url;
-      imagePool.current.set(asset.id, el);
-    }
-    return el;
-  }
-
-  const renderFrame = useCallback(
-    (atSec: number) => {
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (!canvas || !ctx) return;
-
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      for (const track of timeline.tracks) {
-        if (track.kind !== "video" || track.hidden) continue;
-        const clip = findActiveClip(timeline, track.id, atSec);
-        if (!clip) continue;
-        const asset = assets.find((a) => a.id === clip.assetId);
-        if (!asset) continue;
-        const localTime = atSec - clip.start + clip.inPoint;
-
-        if (asset.kind === "video") {
-          const videoEl = getVideoElement(asset);
-          if (Math.abs(videoEl.currentTime - localTime) > 0.08) {
-            videoEl.currentTime = clamp(localTime, 0, Math.max(0, asset.durationSec - 0.05));
-          }
-          drawContain(ctx, videoEl, videoEl.videoWidth, videoEl.videoHeight, canvas.width, canvas.height);
-        } else if (asset.kind === "image") {
-          const imgEl = getImageElement(asset);
-          drawContain(ctx, imgEl, imgEl.naturalWidth, imgEl.naturalHeight, canvas.width, canvas.height);
-        }
-      }
-    },
-    [timeline, assets],
-  );
-
   useEffect(() => {
-    if (!isPlaying) return;
-    let cancelled = false;
-
-    function tick(now: number) {
-      if (cancelled) return;
-      if (lastFrameTimeRef.current == null) lastFrameTimeRef.current = now;
-      const deltaSec = (now - lastFrameTimeRef.current) / 1000;
-      lastFrameTimeRef.current = now;
-
-      const next = playheadRef.current + deltaSec;
-      if (next >= durationSec) {
-        playheadRef.current = durationSec;
-        setPlayhead(durationSec);
-        renderFrame(durationSec);
-        setIsPlaying(false);
-        return;
-      }
-
-      playheadRef.current = next;
-      setPlayhead(next);
-      renderFrame(next);
-      rafRef.current = requestAnimationFrame(tick);
-    }
-
-    rafRef.current = requestAnimationFrame(tick);
+    const pool = videoPool.current;
     return () => {
-      cancelled = true;
-      lastFrameTimeRef.current = null;
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      for (const el of pool.values()) {
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+      }
+      pool.clear();
     };
-  }, [isPlaying, durationSec, setPlayhead, renderFrame]);
-
-  useEffect(() => {
-    if (!isPlaying) renderFrame(timeline.playheadSec);
-  }, [timeline.playheadSec, isPlaying, renderFrame]);
+  }, []);
 
   const togglePlay = useCallback(() => {
-    setIsPlaying((prev) => {
-      if (!prev && playheadRef.current >= durationSec) {
-        playheadRef.current = 0;
-        setPlayhead(0);
-      }
-      return !prev;
-    });
-  }, [durationSec, setPlayhead]);
+    const total = durationRef.current;
+    if (total <= 0) return;
 
-  const seek = useCallback(
-    (sec: number) => {
-      const clamped = clamp(sec, 0, durationSec);
-      playheadRef.current = clamped;
-      setPlayhead(clamped);
-    },
-    [durationSec, setPlayhead],
-  );
+    if (isPlayingRef.current) {
+      setIsPlaying(false);
+      return;
+    }
+    if (playheadRef.current >= total - 1e-3) {
+      playheadRef.current = 0;
+      setPlayheadRef.current(0);
+    }
+    setIsPlaying(true);
+  }, []);
+
+  const seek = useCallback((sec: number) => {
+    const clamped = clamp(sec, 0, durationRef.current);
+    playheadRef.current = clamped;
+    setPlayheadRef.current(clamped);
+  }, []);
 
   return { canvasRef, isPlaying, togglePlay, seek };
 }

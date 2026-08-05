@@ -1,4 +1,4 @@
-import { useEffect, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { MediaAsset } from "../../shared/types";
 import { getAssetDurationBound, getDefaultClipDuration } from "../../shared/mediaUtils";
 import { formatTimecode } from "../../shared/time";
@@ -14,6 +14,12 @@ interface TimelineProps {
 
 const MIN_WIDTH_SEC = 30;
 const TRAIL_SEC = 15;
+/**
+ * Width of the sticky track-name column. The playhead is positioned against it in script
+ * while the columns themselves are laid out in CSS, so it is published as a custom
+ * property below rather than written down in both places — a silent drift between the two
+ * would put the playhead somewhere other than the time it points at.
+ */
 const HEADER_WIDTH_PX = 140;
 
 export function Timeline({ assets, timelineApi }: TimelineProps) {
@@ -33,6 +39,8 @@ export function Timeline({ assets, timelineApi }: TimelineProps) {
     toggleTrackHidden,
   } = timelineApi;
 
+  const rulerRef = useRef<HTMLDivElement>(null);
+  const isScrubbingRef = useRef(false);
   const widthPx = Math.max(MIN_WIDTH_SEC, durationSec + TRAIL_SEC) * timeline.zoomPxPerSec;
 
   useEffect(() => {
@@ -59,10 +67,35 @@ export function Timeline({ assets, timelineApi }: TimelineProps) {
     addClip(trackId, assetId, startSec, duration, 0, duration);
   }
 
-  function handleRulerSeek(event: ReactMouseEvent<HTMLDivElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const sec = Math.max(0, (event.clientX - rect.left) / timeline.zoomPxPerSec);
+  function seekFromClientX(clientX: number) {
+    const rulerEl = rulerRef.current;
+    if (!rulerEl) return;
+    const rect = rulerEl.getBoundingClientRect();
+    setPlayhead(Math.max(0, (clientX - rect.left) / timeline.zoomPxPerSec));
+  }
+
+  function handleRulerPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    // Capture on the ruler, so a scrub that wanders off it keeps tracking the pointer.
+    event.currentTarget.setPointerCapture(event.pointerId);
+    isScrubbingRef.current = true;
+    seekFromClientX(event.clientX);
+  }
+
+  function handleRulerPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (isScrubbingRef.current) seekFromClientX(event.clientX);
+  }
+
+  function handleRulerPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    isScrubbingRef.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  /** Clicking past the clips moves the playhead there and clears the selection. */
+  function handleLaneSeek(sec: number) {
     setPlayhead(sec);
+    selectClip(null);
   }
 
   function handleTrim(clipId: string, edge: "start" | "end", deltaSec: number) {
@@ -76,7 +109,10 @@ export function Timeline({ assets, timelineApi }: TimelineProps) {
   const playheadLeft = HEADER_WIDTH_PX + timeline.playheadSec * timeline.zoomPxPerSec;
 
   return (
-    <section className="timeline">
+    <section
+      className="timeline"
+      style={{ "--timeline-header-width": `${HEADER_WIDTH_PX}px` } as CSSProperties}
+    >
       <header className="timeline__toolbar">
         <div className="timeline__toolbar-group">
           <button type="button" onClick={() => addTrack("video")}>
@@ -119,7 +155,14 @@ export function Timeline({ assets, timelineApi }: TimelineProps) {
         <div className="timeline__content">
           <div className="timeline__ruler-row">
             <div className="timeline__ruler-spacer" />
-            <div className="timeline__ruler-wrap" onMouseDown={handleRulerSeek}>
+            <div
+              className="timeline__ruler-wrap"
+              ref={rulerRef}
+              onPointerDown={handleRulerPointerDown}
+              onPointerMove={handleRulerPointerMove}
+              onPointerUp={handleRulerPointerUp}
+              onPointerCancel={handleRulerPointerUp}
+            >
               <Ruler widthPx={widthPx} pxPerSec={timeline.zoomPxPerSec} durationSec={durationSec} />
             </div>
           </div>
@@ -137,6 +180,7 @@ export function Timeline({ assets, timelineApi }: TimelineProps) {
                 onMoveClip={moveClip}
                 onTrimClip={handleTrim}
                 onDropAsset={handleDropAsset}
+                onSeek={handleLaneSeek}
                 onToggleMute={toggleTrackMute}
                 onToggleHidden={toggleTrackHidden}
               />
